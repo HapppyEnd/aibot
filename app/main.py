@@ -1,9 +1,14 @@
 """
 FastAPI приложение для AI-генератора постов для Telegram
 """
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from app.api.endpoints import router
+from app.config import settings
 from app.database import init_db
 
 app = FastAPI(
@@ -18,9 +23,57 @@ app = FastAPI(
 app.include_router(router, prefix="/api", tags=["api"])
 
 
+def setup_logging():
+    """Настройка логирования в файл"""
+    # Создаем директорию для логов, если её нет
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    log_file = log_dir / "aibot.log"
+
+    # Настраиваем формат логов
+    log_format = (
+        "%(asctime)s - %(name)s - %(levelname)s - "
+        "%(module)s:%(lineno)d - %(message)s"
+    )
+    date_format = "%Y-%m-%d %H:%M:%S"
+
+    # Настраиваем root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper()))
+
+    # Очищаем существующие обработчики
+    root_logger.handlers.clear()
+
+    # Файловый обработчик с ротацией (макс 10MB, 5 файлов)
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding="utf-8"
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter(log_format, datefmt=date_format)
+    )
+
+    # Консольный обработчик
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(
+        logging.DEBUG if settings.DEBUG else logging.INFO
+    )
+    console_handler.setFormatter(
+        logging.Formatter(log_format, datefmt=date_format)
+    )
+
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Инициализация БД при запуске приложения"""
+    """Инициализация при запуске приложения"""
+    setup_logging()
     init_db()
 
 

@@ -100,3 +100,13 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     generated_text: str
     news_id: Optional[str] = None
+
+
+# ErrorLog schemas (для чтения из файла)
+class ErrorLogResponse(BaseModel):
+    """Схема для лога ошибки из файла"""
+    level: str
+    timestamp: str
+    message: str
+    module: Optional[str] = None
+    line: Optional[int] = None
