@@ -19,7 +19,7 @@ from app.database import delete_and_flush, get_db, save_and_refresh
 from app.models import Keyword, NewsItem, Post, PostStatus, Source
 from app.telegram.auth import authorize_telegram
 from app.telegram.publisher import TelegramPublisher
-from app.utils import should_generate_post
+from app.utils import matches_keywords, should_generate_post
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -380,10 +380,19 @@ async def get_news(
         None,
         description="Фильтр по ID источника"
     ),
+    keyword: Optional[str] = Query(
+        None,
+        description=(
+            "Фильтр по ключевому слову "
+            "(новости должны содержать это слово)"
+        )
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Получить список всех новостей.
+
+    Поддерживает фильтрацию по источнику и ключевым словам.
     """
     query = select(NewsItem)
 
@@ -391,14 +400,25 @@ async def get_news(
         query = query.filter(NewsItem.source == source)
     if source_id:
         query = query.filter(NewsItem.source_id == source_id)
+
     query = (
         query.order_by(desc(NewsItem.published_at))
         .offset(skip)
-        .limit(limit)
+        .limit(limit * 3 if keyword else limit)
     )
     result = await db.execute(query)
-    news = result.scalars().all()
-    return news
+    all_news = result.scalars().all()
+
+    if keyword:
+        filtered_news = []
+        for news_item in all_news:
+            if await matches_keywords(news_item, [keyword], db=None):
+                filtered_news.append(news_item)
+                if len(filtered_news) >= limit:
+                    break
+        return filtered_news
+
+    return all_news[:limit]
 
 
 @router.get(

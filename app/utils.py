@@ -181,11 +181,12 @@ async def should_generate_post(
     if check_keywords:
         result = await db.execute(select(Keyword))
         keywords = [kw.word for kw in result.scalars().all()]
-        if keywords and not await matches_keywords(news_item, keywords, db):
-            return (
-                False,
-                "Новость не содержит ключевых слов"
-            )
+        if keywords:
+            if not await matches_keywords(news_item, keywords, db):
+                return (
+                    False,
+                    "Новость не содержит ключевых слов"
+                )
 
     if check_duplicates:
         if await is_duplicate(news_item, db):
