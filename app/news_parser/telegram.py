@@ -116,7 +116,7 @@ class TelegramChannelParser:
             return None
 
     async def parse(self, limit: int = DEFAULT_PARSE_LIMIT) -> list[dict]:
-        """Парсит сообщения из Telegram-канала"""
+        """Парсит сообщения из Telegram-канала."""
         await self._connect()
 
         try:

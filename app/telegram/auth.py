@@ -1,6 +1,3 @@
-"""
-Модуль для авторизации в Telegram
-"""
 import logging
 from typing import Dict
 

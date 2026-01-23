@@ -1,6 +1,3 @@
-"""
-Telegram бот для управления и мониторинга
-"""
 import logging
 
 from telethon import TelegramClient

@@ -382,10 +382,7 @@ async def get_news(
     ),
     keyword: Optional[str] = Query(
         None,
-        description=(
-            "Фильтр по ключевому слову "
-            "(новости должны содержать это слово)"
-        )
+        description=("Фильтр по ключевому слову ")
     ),
     db: AsyncSession = Depends(get_db)
 ):
