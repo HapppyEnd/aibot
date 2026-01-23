@@ -21,8 +21,12 @@ class Settings(BaseSettings):
     TELEGRAM_API_HASH: Optional[str] = None
     TELEGRAM_CHANNEL_USERNAME: Optional[str] = None
 
-    # OpenAI (опционально для тестирования)
-    OPENAI_API_KEY: Optional[str] = None
+    # SberGigaChat (доступен в России!)))
+    # Вариант 1: отдельные client_id и client_secret
+    GIGACHAT_CLIENT_ID: Optional[str] = None
+    GIGACHAT_CLIENT_SECRET: Optional[str] = None
+    # Вариант 2: готовый base64 ключ (client_id:client_secret в base64)
+    GIGACHAT_API_KEY: Optional[str] = None
 
     # App
     DEBUG: bool = False
@@ -31,6 +35,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()

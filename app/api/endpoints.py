@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import List, Optional
 
@@ -5,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.api.schemas import (ErrorLogResponse, KeywordCreate, KeywordResponse,
+from app.ai.generator import AIProviderError, PostGenerator
+from app.api.schemas import (ErrorLogResponse, GenerateRequest,
+                             GenerateResponse, KeywordCreate, KeywordResponse,
                              NewsItemResponse, PostResponse, SourceCreate,
                              SourceResponse, SourceUpdate)
 from app.database import get_db
@@ -69,7 +72,7 @@ async def get_source(source_id: int, db: Session = Depends(get_db)):
 async def create_source(source: SourceCreate, db: Session = Depends(get_db)):
     """
     Создать новый источник новостей (сайт или Telegram-канал).
-    
+
     - **type**: Тип источника (site или tg)
     - **name**: Название источника
     - **url**: URL сайта или username Telegram-канала
@@ -212,7 +215,7 @@ async def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=404, detail="Ключевое слово не найдено"
         )
-    
+
     db.delete(db_keyword)
     db.commit()
     return None
@@ -434,3 +437,71 @@ async def get_recent_error_logs(
     all_logs = read_log_lines(log_file, limit=limit, level_filter=level_filter)
 
     return all_logs
+
+
+@router.post(
+    "/generate",
+    response_model=GenerateResponse,
+    summary="Сгенерировать пост вручную"
+)
+async def generate_post(
+    request: GenerateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Сгенерировать пост на основе новости или произвольного текста.
+    Можно указать news_id для использования существующей новости,
+    или передать text напрямую.
+
+    - **news_id**: ID новости из базы данных (опционально)
+    - **text**: Произвольный текст для генерации
+    - **custom_prompt**: Кастомный промпт для генерации (опционально)
+    """
+    generator = PostGenerator()
+
+    if request.news_id:
+        news_item = db.query(NewsItem).filter(
+            NewsItem.id == request.news_id
+        ).first()
+        if not news_item:
+            raise HTTPException(
+                status_code=404, detail="Новость не найдена"
+            )
+
+        news_text = f"{news_item.title}\n\n{news_item.summary}"
+        if news_item.raw_text:
+            news_text += f"\n\n{news_item.raw_text}"
+    elif request.text:
+        news_text = request.text
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Необходимо указать либо news_id, либо text"
+        )
+
+    try:
+        generated_text = generator.generate_post(
+            news_text=news_text,
+            custom_prompt=request.custom_prompt
+        )
+
+        return GenerateResponse(
+            generated_text=generated_text,
+            news_id=request.news_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except AIProviderError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Ошибка AI провайдера: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка при генерации поста: {str(e)}"
+        )
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Ошибка при генерации поста: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка при генерации поста: {str(e)}"
+        )
