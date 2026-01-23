@@ -12,10 +12,12 @@ from app.api.helpers import (bad_request_error, create_publish_response,
 from app.api.schemas import (GenerateRequest, GenerateResponse, KeywordCreate,
                              KeywordResponse, NewsItemResponse, PostCreate,
                              PostResponse, PublishRequest, PublishResponse,
-                             SourceCreate, SourceResponse, SourceUpdate)
+                             SourceCreate, SourceResponse, SourceUpdate,
+                             TelegramAuthRequest, TelegramAuthResponse)
 from app.config import settings
 from app.database import delete_and_flush, get_db, save_and_refresh
 from app.models import Keyword, NewsItem, Post, PostStatus, Source
+from app.telegram.auth import authorize_telegram
 from app.telegram.publisher import TelegramPublisher
 from app.utils import should_generate_post
 
@@ -606,3 +608,49 @@ async def publish_post(
         raise server_error(f"Ошибка при публикации: {str(e)}")
     finally:
         await publisher.disconnect()
+
+
+@router.post(
+    "/telegram/auth",
+    response_model=TelegramAuthResponse,
+    summary="Авторизация в Telegram"
+)
+async def telegram_auth(request: TelegramAuthRequest):
+    """
+    Авторизация в Telegram через API.
+
+    Процесс авторизации состоит из двух шагов:
+
+    1. **Первый запрос** - отправка номера телефона:
+       ```json
+       {
+         "phone": "+79991234567"
+       }
+       ```
+       В ответ придет `next_step: "code"` - нужно ввести код из Telegram.
+
+    2. **Второй запрос** - отправка кода:
+       ```json
+       {
+         "phone": "+79991234567",
+         "code": "12345"
+       }
+       ```
+
+    После успешной авторизации сессия сохраняется в файл и больше не требуется.
+
+    - `phone`: Номер телефона в формате +7XXXXXXXXXX
+    - `code`: Код подтверждения из Telegram (опционально)
+    """
+    if not settings.TELEGRAM_API_ID or not settings.TELEGRAM_API_HASH:
+        raise server_error("TELEGRAM_API_ID и TELEGRAM_API_HASH не настроены")
+
+    if not request.phone:
+        raise bad_request_error("Номер телефона не может быть пустым")
+
+    result = await authorize_telegram(
+        phone=request.phone,
+        code=request.code
+    )
+
+    return TelegramAuthResponse(**result)

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     TELEGRAM_API_ID: Optional[int] = None
     TELEGRAM_API_HASH: Optional[str] = None
     TELEGRAM_CHANNEL_USERNAME: Optional[str] = None
+    TELEGRAM_SESSION_NAME: Optional[str] = 'telegram_session'
 
     # SberGigaChat (доступен в России!)))
     # отдельные client_id и client_secret

@@ -129,3 +129,18 @@ class PublishResponse(BaseModel):
     message: str
     telegram_message_id: Optional[int] = None
     post_id: Optional[int] = None
+
+
+class TelegramAuthRequest(BaseModel):
+    """Запрос на авторизацию в Telegram"""
+    phone: str
+    code: Optional[str] = None
+
+
+class TelegramAuthResponse(BaseModel):
+    """Ответ на запрос авторизации в Telegram"""
+    success: bool
+    message: str
+    phone: Optional[str] = None
+    username: Optional[str] = None
+    next_step: Optional[str] = None
