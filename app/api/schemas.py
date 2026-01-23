@@ -20,11 +20,17 @@ class PostStatus(str, Enum):
     FAILED = "failed"
 
 
-# Source schemas
 class SourceBase(BaseModel):
+    """
+    Базовая схема источника новостей
+
+    Поле url имеет разное значение в зависимости от type:
+    - type='site': URL сайта (например, "https://habr.com")
+    - type='tg': username Telegram-канала
+    """
     type: SourceType
     name: str
-    url: str
+    url: str  # URL для сайтов, username для Telegram-каналов
     enabled: bool = True
 
 
@@ -46,7 +52,6 @@ class SourceResponse(SourceBase):
         from_attributes = True
 
 
-# Keyword schemas
 class KeywordBase(BaseModel):
     word: str
 
@@ -63,7 +68,6 @@ class KeywordResponse(KeywordBase):
         from_attributes = True
 
 
-# NewsItem schemas
 class NewsItemResponse(BaseModel):
     id: str
     title: str
@@ -77,7 +81,13 @@ class NewsItemResponse(BaseModel):
         from_attributes = True
 
 
-# Post schemas
+class PostCreate(BaseModel):
+    """Схема для создания нового поста"""
+    news_id: str
+    generated_text: str
+    status: PostStatus = PostStatus.NEW
+
+
 class PostResponse(BaseModel):
     id: int
     news_id: str
@@ -90,7 +100,6 @@ class PostResponse(BaseModel):
         from_attributes = True
 
 
-# Generate schemas
 class GenerateRequest(BaseModel):
     news_id: Optional[str] = None
     text: Optional[str] = None
@@ -102,11 +111,21 @@ class GenerateResponse(BaseModel):
     news_id: Optional[str] = None
 
 
-# ErrorLog schemas (для чтения из файла)
-class ErrorLogResponse(BaseModel):
-    """Схема для лога ошибки из файла"""
-    level: str
-    timestamp: str
+class PublishRequest(BaseModel):
+    """
+    Запрос на публикацию поста
+
+    Можно указать либо post_id (для публикации существующего поста),
+    либо text (для публикации произвольного текста)
+    """
+    post_id: Optional[int] = None
+    text: Optional[str] = None
+    channel_username: Optional[str] = None
+
+
+class PublishResponse(BaseModel):
+    """Ответ на запрос публикации"""
+    success: bool
     message: str
-    module: Optional[str] = None
-    line: Optional[int] = None
+    telegram_message_id: Optional[int] = None
+    post_id: Optional[int] = None

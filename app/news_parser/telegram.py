@@ -1,7 +1,6 @@
 """
 Парсер новостей из Telegram-каналов
 """
-import asyncio
 import logging
 from datetime import datetime
 
@@ -14,13 +13,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Константы
-MIN_TEXT_LENGTH = 5  # Минимальная длина текста сообщения для обработки
-MAX_TITLE_LENGTH = 100  # Максимальная длина заголовка
+MIN_TEXT_LENGTH = 5
+MAX_TITLE_LENGTH = 100
 TELEGRAM_URL_TEMPLATE = "https://t.me/{channel}/{message_id}"
 MEDIA_PHOTO_LABEL = "[Фото]"
 MEDIA_DOCUMENT_LABEL = "[Документ]"
-DEFAULT_PARSE_LIMIT = 100  # Количество сообщений по умолчанию
+DEFAULT_PARSE_LIMIT = 100
 
 
 class TelegramChannelParser:
@@ -35,10 +33,10 @@ class TelegramChannelParser:
         api_hash='your_api_hash',
         channel_username='channel_name'
     )
-    news = parser.parse()
+    news = await parser.parse()
 
     # Парсинг последних N сообщений
-    news = parser.parse(limit=50)
+    news = await parser.parse(limit=50)
     """
 
     def __init__(
@@ -177,17 +175,23 @@ class TelegramChannelParser:
             )
             return None
 
-    async def _parse_async(
-        self, limit: int = DEFAULT_PARSE_LIMIT
-    ) -> list[dict]:
+    async def parse(self, limit: int = DEFAULT_PARSE_LIMIT) -> list[dict]:
         """
-        Асинхронный парсинг сообщений из канала
+        Парсит сообщения из Telegram-канала
 
         Args:
             limit: Максимальное количество сообщений для парсинга
 
         Returns:
-            Список словарей с новостями
+            Список словарей с новостями:
+            {
+                'title': str,
+                'url': str,
+                'summary': str,
+                'source': str,
+                'published_at': datetime,
+                'raw_text': str
+            }
         """
         await self._connect()
 
@@ -234,29 +238,3 @@ class TelegramChannelParser:
             return []
         finally:
             await self._disconnect()
-
-    def parse(self, limit: int = DEFAULT_PARSE_LIMIT) -> list[dict]:
-        """
-        Парсит сообщения из Telegram-канала
-
-        Args:
-            limit: Максимальное количество сообщений для парсинга
-
-        Returns:
-            Список словарей с новостями:
-            {
-                'title': str,
-                'url': str,
-                'summary': str,
-                'source': str,
-                'published_at': datetime,
-                'raw_text': str
-            }
-        """
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self._parse_async(limit))

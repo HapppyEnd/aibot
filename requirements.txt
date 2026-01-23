@@ -11,8 +11,10 @@ redis==5.0.1
 # kombu==5.3.4  # если используете RabbitMQ
 
 # База данных
-sqlalchemy==2.0.23
+sqlalchemy[asyncio]==2.0.23
 alembic==1.12.1
+asyncpg==0.29.0  # Async драйвер для PostgreSQL
+psycopg2-binary==2.9.9  # Синхронный драйвер для PostgreSQL (для Alembic)
 
 # Telegram
 telethon==1.34.0
@@ -32,6 +34,8 @@ python-dotenv==1.0.0
 # Утилиты
 python-dateutil==2.8.2
 pytz==2023.3
+langdetect==1.0.9
+httpx==0.25.2  # Для проверки API эндпоинтов
 
 # Логирование (встроено в Python, но можно добавить для улучшения)
 # loguru==0.7.2  # опционально

@@ -2,16 +2,23 @@
 Модели данных для базы данных
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import Boolean, Column, DateTime
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import ForeignKey, Integer, String, Text
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
-Base = declarative_base()
+from app.database import Base
+
+
+def utcnow():
+    """Возвращает текущее время в UTC"""
+    return datetime.now(timezone.utc)
+
+
+Timestamp = DateTime(timezone=True)
 
 
 class SourceType(str, Enum):
@@ -35,9 +42,8 @@ class Source(Base):
     name = Column(String(255), nullable=False)
     url = Column(String(500), nullable=False)
     enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(Timestamp, default=utcnow)
 
-    # relationships
     news_items = relationship("NewsItem", back_populates="source_obj")
 
 
@@ -47,7 +53,7 @@ class Keyword(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     word = Column(String(100), nullable=False, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(Timestamp, default=utcnow)
 
 
 class NewsItem(Base):
@@ -64,13 +70,12 @@ class NewsItem(Base):
     title = Column(String(500), nullable=False)
     url = Column(String(1000), nullable=True)
     summary = Column(Text, nullable=False)
-    source = Column(String(255), nullable=False)  # Название источника
+    source = Column(String(255), nullable=False)
     source_id = Column(Integer, ForeignKey("sources.id"), nullable=True)
-    published_at = Column(DateTime, nullable=False)
+    published_at = Column(Timestamp, nullable=False)
     raw_text = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(Timestamp, default=utcnow)
 
-    # relationships
     source_obj = relationship("Source", back_populates="news_items")
     posts = relationship("Post", back_populates="news_item")
 
@@ -82,9 +87,8 @@ class Post(Base):
     id = Column(Integer, primary_key=True, index=True)
     news_id = Column(String(36), ForeignKey("news_items.id"), nullable=False)
     generated_text = Column(Text, nullable=False)
-    published_at = Column(DateTime, nullable=True)
+    published_at = Column(Timestamp, nullable=True)
     status = Column(SQLEnum(PostStatus), default=PostStatus.NEW)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(Timestamp, default=utcnow)
 
-    # relationships
     news_item = relationship("NewsItem", back_populates="posts")

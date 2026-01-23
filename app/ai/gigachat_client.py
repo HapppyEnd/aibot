@@ -35,37 +35,30 @@ class GigaChatClient:
             client_id: Client ID для авторизации GigaChat
             client_secret: Client Secret для авторизации GigaChat
             api_key: API ключ авторизации GigaChat
-                (base64 строка client_id:client_secret)
         """
         self.client_id = client_id or settings.GIGACHAT_CLIENT_ID
         self.client_secret = client_secret or settings.GIGACHAT_CLIENT_SECRET
         self.api_key = api_key or settings.GIGACHAT_API_KEY
 
-        if self.client_id and self.client_secret:
+        has_client_creds = bool(self.client_id and self.client_secret)
+        has_api_key = bool(self.api_key)
+
+        if has_client_creds and has_api_key:
+            logger.warning(
+                "Указаны оба способа авторизации (client_id/client_secret "
+                "и api_key). Используется api_key."
+            )
+            api_key_clean = self.api_key.strip()
+            self.credentials = api_key_clean
+            logger.debug("Используется готовый API ключ")
+        elif has_client_creds:
             credentials_string = f"{self.client_id}:{self.client_secret}"
             self.credentials = base64.b64encode(
                 credentials_string.encode('utf-8')
             ).decode('utf-8')
             logger.debug("Используются client_id и client_secret")
-        elif self.api_key:
+        elif has_api_key:
             api_key_clean = self.api_key.strip()
-
-            try:
-                decoded = base64.b64decode(api_key_clean).decode('utf-8')
-                if ':' not in decoded:
-                    logger.warning(
-                        "Ключ GigaChat может быть в неправильном формате. "
-                        "Ожидается base64(client_id:client_secret)"
-                    )
-                else:
-                    logger.debug("Ключ GigaChat успешно декодирован")
-            except Exception as e:
-                logger.warning(
-                    f"Не удалось декодировать ключ GigaChat: {e}. "
-                    "Убедитесь, что ключ в формате base64 и скопирован "
-                    "полностью."
-                )
-
             self.credentials = api_key_clean
             logger.debug("Используется готовый API ключ")
         else:

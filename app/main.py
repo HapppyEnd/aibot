@@ -25,27 +25,22 @@ app.include_router(router, prefix="/api", tags=["api"])
 
 def setup_logging():
     """Настройка логирования в файл"""
-    # Создаем директорию для логов, если её нет
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
     log_file = log_dir / "aibot.log"
 
-    # Настраиваем формат логов
     log_format = (
         "%(asctime)s - %(name)s - %(levelname)s - "
         "%(module)s:%(lineno)d - %(message)s"
     )
     date_format = "%Y-%m-%d %H:%M:%S"
 
-    # Настраиваем root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper()))
 
-    # Очищаем существующие обработчики
     root_logger.handlers.clear()
 
-    # Файловый обработчик с ротацией (макс 10MB, 5 файлов)
     file_handler = RotatingFileHandler(
         log_file,
         maxBytes=10 * 1024 * 1024,  # 10MB
@@ -57,7 +52,6 @@ def setup_logging():
         logging.Formatter(log_format, datefmt=date_format)
     )
 
-    # Консольный обработчик
     console_handler = logging.StreamHandler()
     console_handler.setLevel(
         logging.DEBUG if settings.DEBUG else logging.INFO
@@ -74,7 +68,7 @@ def setup_logging():
 async def startup_event():
     """Инициализация при запуске приложения"""
     setup_logging()
-    init_db()
+    await init_db()
 
 
 @app.get("/")

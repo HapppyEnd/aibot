@@ -23,7 +23,7 @@ class PostGenerator:
         Инициализация генератора
 
         Args:
-            api_key: API ключ GigaChat (опционально)
+            api_key: API ключ GigaChat
         """
         self.client = GigaChatClient(api_key=api_key)
         self.default_prompt_template = DEFAULT_PROMPT_TEMPLATE

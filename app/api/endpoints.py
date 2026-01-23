@@ -1,20 +1,69 @@
+import asyncio
 import logging
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc
-from sqlalchemy.orm import Session
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.generator import AIProviderError, PostGenerator
-from app.api.schemas import (ErrorLogResponse, GenerateRequest,
-                             GenerateResponse, KeywordCreate, KeywordResponse,
-                             NewsItemResponse, PostResponse, SourceCreate,
-                             SourceResponse, SourceUpdate)
-from app.database import get_db
-from app.models import Keyword, NewsItem, Post, Source
+from app.api.helpers import (bad_request_error, create_publish_response,
+                             not_found_error, server_error)
+from app.api.schemas import (GenerateRequest, GenerateResponse, KeywordCreate,
+                             KeywordResponse, NewsItemResponse, PostCreate,
+                             PostResponse, PublishRequest, PublishResponse,
+                             SourceCreate, SourceResponse, SourceUpdate)
+from app.config import settings
+from app.database import delete_and_flush, get_db, save_and_refresh
+from app.models import Keyword, NewsItem, Post, PostStatus, Source
+from app.telegram.publisher import TelegramPublisher
+from app.utils import should_generate_post
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def create_or_update_post(
+    db: AsyncSession,
+    news_id: str,
+    generated_text: str,
+    status: PostStatus = PostStatus.GENERATED
+) -> Post:
+    """
+    Создает новый пост или обновляет существующий для новости.
+
+    Args:
+        db: Async сессия БД
+        news_id: ID новости
+        generated_text: Сгенерированный текст поста
+        status: Статус поста
+
+    Returns:
+        Созданный или обновленный пост
+    """
+    result = await db.execute(
+        select(Post).filter(
+            Post.news_id == news_id,
+            Post.status == PostStatus.GENERATED
+        )
+    )
+    existing_post = result.scalar_one_or_none()
+
+    if existing_post:
+        existing_post.generated_text = generated_text
+        existing_post.status = status
+        post = existing_post
+    else:
+        new_post = Post(
+            news_id=news_id,
+            generated_text=generated_text,
+            status=status
+        )
+        db.add(new_post)
+        post = new_post
+
+    await save_and_refresh(db, post)
+    return post
 
 
 @router.get(
@@ -30,23 +79,21 @@ async def get_sources(
     enabled: Optional[bool] = Query(
         None, description="Фильтр по статусу активности"
     ),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Получить список всех источников новостей (сайты и Telegram-каналы).
     Поддерживает пагинацию и фильтрацию по статусу активности.
     """
-    query = db.query(Source)
+    query = select(Source)
 
     if enabled is not None:
         query = query.filter(Source.enabled == enabled)
 
-    sources = (
-        query.order_by(desc(Source.created_at))
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    query = query.order_by(desc(Source.created_at)).offset(skip).limit(limit)
+
+    result = await db.execute(query)
+    sources = result.scalars().all()
     return sources
 
 
@@ -55,11 +102,14 @@ async def get_sources(
     response_model=SourceResponse,
     summary="Получить источник по ID"
 )
-async def get_source(source_id: int, db: Session = Depends(get_db)):
+async def get_source(source_id: int, db: AsyncSession = Depends(get_db)):
     """Получить информацию об источнике по его ID"""
-    source = db.query(Source).filter(Source.id == source_id).first()
+    result = await db.execute(
+        select(Source).filter(Source.id == source_id)
+    )
+    source = result.scalar_one_or_none()
     if not source:
-        raise HTTPException(status_code=404, detail="Источник не найден")
+        raise not_found_error("Источник не найден")
     return source
 
 
@@ -69,19 +119,24 @@ async def get_source(source_id: int, db: Session = Depends(get_db)):
     status_code=201,
     summary="Создать новый источник"
 )
-async def create_source(source: SourceCreate, db: Session = Depends(get_db)):
+async def create_source(
+    source: SourceCreate, db: AsyncSession = Depends(get_db)
+):
     """
     Создать новый источник новостей (сайт или Telegram-канал).
 
-    - **type**: Тип источника (site или tg)
-    - **name**: Название источника
-    - **url**: URL сайта или username Telegram-канала
-    - **enabled**: Активен ли источник (по умолчанию True)
+    - `type`: Тип источника
+        - `site` - для веб-сайтов
+        - `tg` - для Telegram-каналов
+    - `name`: Название источника (например, "Habr", "Мой канал")
+    - `url`:
+        - Для сайтов (`type=site`): URL сайта (например, "https://habr.com")
+        - Для Telegram (`type=tg`): username канала с @ или без
+          (например, "@channel_name" или "channel_name")
+    - `enabled`: Активен ли источник (по умолчанию True)
     """
     db_source = Source(**source.dict())
-    db.add(db_source)
-    db.commit()
-    db.refresh(db_source)
+    await save_and_refresh(db, db_source, add=True)
     return db_source
 
 
@@ -93,22 +148,23 @@ async def create_source(source: SourceCreate, db: Session = Depends(get_db)):
 async def update_source(
     source_id: int,
     source_update: SourceUpdate,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Обновить информацию об источнике.
-    Можно обновить название, URL и статус активности.
     """
-    db_source = db.query(Source).filter(Source.id == source_id).first()
+    result = await db.execute(
+        select(Source).filter(Source.id == source_id)
+    )
+    db_source = result.scalar_one_or_none()
     if not db_source:
-        raise HTTPException(status_code=404, detail="Источник не найден")
+        raise not_found_error("Источник не найден")
 
     update_data = source_update.dict(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_source, field, value)
 
-    db.commit()
-    db.refresh(db_source)
+    await save_and_refresh(db, db_source)
     return db_source
 
 
@@ -117,17 +173,19 @@ async def update_source(
     status_code=204,
     summary="Удалить источник"
 )
-async def delete_source(source_id: int, db: Session = Depends(get_db)):
+async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
     """
     Удалить источник новостей.
     Внимание: это также удалит все связанные новости и логи ошибок.
     """
-    db_source = db.query(Source).filter(Source.id == source_id).first()
+    result = await db.execute(
+        select(Source).filter(Source.id == source_id)
+    )
+    db_source = result.scalar_one_or_none()
     if not db_source:
-        raise HTTPException(status_code=404, detail="Источник не найден")
+        raise not_found_error("Источник не найден")
 
-    db.delete(db_source)
-    db.commit()
+    await delete_and_flush(db, db_source)
     return None
 
 
@@ -141,19 +199,19 @@ async def get_keywords(
     limit: int = Query(
         100, ge=1, le=1000, description="Максимальное количество записей"
     ),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Получить список всех ключевых слов для фильтрации новостей.
-    Поддерживает пагинацию.
     """
-    keywords = (
-        db.query(Keyword)
+    query = (
+        select(Keyword)
         .order_by(desc(Keyword.created_at))
         .offset(skip)
         .limit(limit)
-        .all()
     )
+    result = await db.execute(query)
+    keywords = result.scalars().all()
     return keywords
 
 
@@ -162,13 +220,14 @@ async def get_keywords(
     response_model=KeywordResponse,
     summary="Получить ключевое слово по ID"
 )
-async def get_keyword(keyword_id: int, db: Session = Depends(get_db)):
-    """Получить информацию о ключевом слове по его ID"""
-    keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
+async def get_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
+    """Получить ключевое слово по ID"""
+    result = await db.execute(
+        select(Keyword).filter(Keyword.id == keyword_id)
+    )
+    keyword = result.scalar_one_or_none()
     if not keyword:
-        raise HTTPException(
-            status_code=404, detail="Ключевое слово не найдено"
-        )
+        raise not_found_error("Ключевое слово не найдено")
     return keyword
 
 
@@ -179,25 +238,22 @@ async def get_keyword(keyword_id: int, db: Session = Depends(get_db)):
     summary="Добавить ключевое слово"
 )
 async def create_keyword(
-    keyword: KeywordCreate, db: Session = Depends(get_db)
+    keyword: KeywordCreate, db: AsyncSession = Depends(get_db)
 ):
     """
     Добавить новое ключевое слово для фильтрации новостей.
 
-    - **word**: Ключевое слово (должно быть уникальным)
+    - `word`: Ключевое слово (должно быть уникальным)
     """
-    existing = db.query(Keyword).filter(
-        Keyword.word == keyword.word
-    ).first()
+    result = await db.execute(
+        select(Keyword).filter(Keyword.word == keyword.word)
+    )
+    existing = result.scalar_one_or_none()
     if existing:
-        raise HTTPException(
-            status_code=400, detail="Ключевое слово уже существует"
-        )
+        raise bad_request_error("Ключевое слово уже существует")
 
     db_keyword = Keyword(**keyword.dict())
-    db.add(db_keyword)
-    db.commit()
-    db.refresh(db_keyword)
+    await save_and_refresh(db, db_keyword, add=True)
     return db_keyword
 
 
@@ -206,18 +262,16 @@ async def create_keyword(
     status_code=204,
     summary="Удалить ключевое слово"
 )
-async def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
+async def delete_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
     """Удалить ключевое слово из списка фильтров"""
-    db_keyword = (
-        db.query(Keyword).filter(Keyword.id == keyword_id).first()
+    result = await db.execute(
+        select(Keyword).filter(Keyword.id == keyword_id)
     )
+    db_keyword = result.scalar_one_or_none()
     if not db_keyword:
-        raise HTTPException(
-            status_code=404, detail="Ключевое слово не найдено"
-        )
+        raise not_found_error("Ключевое слово не найдено")
 
-    db.delete(db_keyword)
-    db.commit()
+    await delete_and_flush(db, db_keyword)
     return None
 
 
@@ -236,13 +290,13 @@ async def get_posts(
         description="Фильтр по статусу (new, generated, published, failed)"
     ),
     news_id: Optional[str] = Query(None, description="Фильтр по ID новости"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Получить историю всех постов.
     Поддерживает пагинацию и фильтрацию по статусу и ID новости.
     """
-    query = db.query(Post)
+    query = select(Post)
 
     if status:
         query = query.filter(Post.status == status)
@@ -250,13 +304,44 @@ async def get_posts(
     if news_id:
         query = query.filter(Post.news_id == news_id)
 
-    posts = (
-        query.order_by(desc(Post.created_at))
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    query = query.order_by(desc(Post.created_at)).offset(skip).limit(limit)
+
+    result = await db.execute(query)
+    posts = result.scalars().all()
     return posts
+
+
+@router.post(
+    "/posts/",
+    response_model=PostResponse,
+    status_code=201,
+    summary="Создать новый пост вручную"
+)
+async def create_post(
+    post: PostCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Создать новый пост вручную.
+
+    - `news_id`: ID новости из базы данных (обязательно)
+    - `generated_text`: Текст поста для публикации
+    - `status`: Статус поста (по умолчанию "new")
+    """
+    result = await db.execute(
+        select(NewsItem).filter(NewsItem.id == post.news_id)
+    )
+    news_item = result.scalar_one_or_none()
+    if not news_item:
+        raise not_found_error(f"Новость с ID {post.news_id} не найдена")
+
+    db_post = Post(
+        news_id=post.news_id,
+        generated_text=post.generated_text,
+        status=post.status
+    )
+    await save_and_refresh(db, db_post, add=True)
+    return db_post
 
 
 @router.get(
@@ -264,11 +349,14 @@ async def get_posts(
     response_model=PostResponse,
     summary="Получить пост по ID"
 )
-async def get_post(post_id: int, db: Session = Depends(get_db)):
-    """Получить информацию о посте по его ID"""
-    post = db.query(Post).filter(Post.id == post_id).first()
+async def get_post(post_id: int, db: AsyncSession = Depends(get_db)):
+    """Получить пост по ID"""
+    result = await db.execute(
+        select(Post).filter(Post.id == post_id)
+    )
+    post = result.scalar_one_or_none()
     if not post:
-        raise HTTPException(status_code=404, detail="Пост не найден")
+        raise not_found_error("Пост не найден")
     return post
 
 
@@ -290,27 +378,60 @@ async def get_news(
         None,
         description="Фильтр по ID источника"
     ),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Получить список всех новостей.
-    Поддерживает пагинацию и фильтрацию по источнику.
     """
-    query = db.query(NewsItem)
+    query = select(NewsItem)
 
     if source:
         query = query.filter(NewsItem.source == source)
-
     if source_id:
         query = query.filter(NewsItem.source_id == source_id)
-
-    news = (
+    query = (
         query.order_by(desc(NewsItem.published_at))
         .offset(skip)
         .limit(limit)
-        .all()
     )
+    result = await db.execute(query)
+    news = result.scalars().all()
     return news
+
+
+@router.get(
+    "/news/filtered",
+    response_model=List[NewsItemResponse],
+    summary="Получить отфильтрованные новости для генерации"
+)
+async def get_filtered_news(
+    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Максимальное количество записей"
+    ),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Получить список новостей, которые прошли фильтрацию и готовы
+    к генерации постов.
+    """
+    query = (
+        select(NewsItem)
+        .order_by(desc(NewsItem.published_at))
+        .offset(skip)
+        .limit(limit * 3)
+    )
+    result = await db.execute(query)
+    all_news = result.scalars().all()
+    filtered_news = []
+    for news_item in all_news:
+        should_generate, _ = await should_generate_post(news_item, db)
+        if should_generate:
+            filtered_news.append(news_item)
+            if len(filtered_news) >= limit:
+                break
+
+    return filtered_news
 
 
 @router.get(
@@ -318,125 +439,15 @@ async def get_news(
     response_model=NewsItemResponse,
     summary="Получить новость по ID"
 )
-async def get_news_item(news_id: str, db: Session = Depends(get_db)):
-    """Получить информацию о новости по её ID"""
-    news_item = db.query(NewsItem).filter(NewsItem.id == news_id).first()
+async def get_news_item(news_id: str, db: AsyncSession = Depends(get_db)):
+    """Получить новость по ID"""
+    result = await db.execute(
+        select(NewsItem).filter(NewsItem.id == news_id)
+    )
+    news_item = result.scalar_one_or_none()
     if not news_item:
-        raise HTTPException(status_code=404, detail="Новость не найдена")
+        raise not_found_error("Новость не найдена")
     return news_item
-
-
-def read_log_lines(
-    log_file_path: Path, limit: int = 100, level_filter: Optional[str] = None
-):
-    """
-    Читает последние строки из файла логов.
-
-    level_filter: может быть одним уровнем (ERROR) или несколькими через |
-                  (ERROR|WARNING). Если указан, фильтрует строки по уровню.
-    """
-    if not log_file_path.exists():
-        return []
-
-    try:
-        with open(log_file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        recent_lines = lines[-limit:] if len(lines) > limit else lines
-
-        if level_filter:
-            allowed_levels = [
-                level.strip().upper()
-                for level in level_filter.split("|")
-            ]
-            filtered_lines = []
-            for line in recent_lines:
-                line_upper = line.upper()
-                if any(level in line_upper for level in allowed_levels):
-                    filtered_lines.append(line)
-            recent_lines = filtered_lines
-
-        logs = []
-        for line in recent_lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            parts = line.split(" - ")
-            timestamp = parts[0] if len(parts) > 0 else ""
-            level = ""
-            if len(parts) > 2:
-                for part in parts:
-                    part_upper = part.strip().upper()
-                    if part_upper in ["ERROR", "WARNING", "INFO", "DEBUG"]:
-                        level = part_upper
-                        break
-
-            logs.append({
-                "timestamp": timestamp,
-                "level": level,
-                "message": line,
-                "module": None,
-                "line": None
-            })
-
-        logs.reverse()
-        return logs
-    except Exception:
-        return []
-
-
-@router.get(
-    "/logs/",
-    response_model=List[ErrorLogResponse],
-    summary="Получить логи ошибок"
-)
-async def get_error_logs(
-    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Максимальное количество записей"
-    ),
-    level: Optional[str] = Query(
-        None, description="Фильтр по уровню (ERROR, WARNING, INFO, DEBUG)"
-    ),
-):
-    """
-    Получить логи ошибок системы из файла.
-    Поддерживает пагинацию и фильтрацию по уровню логирования.
-
-    Уровни: ERROR, WARNING, INFO, DEBUG
-    """
-    log_file = Path("logs") / "aibot.log"
-
-    read_limit = skip + limit
-    all_logs = read_log_lines(log_file, limit=read_limit, level_filter=level)
-
-    paginated_logs = all_logs[skip:skip + limit]
-
-    return paginated_logs
-
-
-@router.get(
-    "/logs/recent",
-    response_model=List[ErrorLogResponse],
-    summary="Получить последние логи ошибок"
-)
-async def get_recent_error_logs(
-    limit: int = Query(50, ge=1, le=500, description="Количество записей"),
-    level: Optional[str] = Query(
-        None, description="Фильтр по уровню (ERROR, WARNING)"
-    ),
-):
-    """
-    Получить последние логи ошибок (только ERROR и WARNING по умолчанию).
-    Удобный эндпоинт для быстрого просмотра проблем.
-    """
-    log_file = Path("logs") / "aibot.log"
-
-    level_filter = level or "ERROR|WARNING"
-    all_logs = read_log_lines(log_file, limit=limit, level_filter=level_filter)
-
-    return all_logs
 
 
 @router.post(
@@ -446,27 +457,30 @@ async def get_recent_error_logs(
 )
 async def generate_post(
     request: GenerateRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Сгенерировать пост на основе новости или произвольного текста.
     Можно указать news_id для использования существующей новости,
     или передать text напрямую.
 
-    - **news_id**: ID новости из базы данных (опционально)
-    - **text**: Произвольный текст для генерации
-    - **custom_prompt**: Кастомный промпт для генерации (опционально)
+    - `news_id`: ID новости
+    - `text`: Произвольный текст для генерации
+    - `custom_prompt`: Промпт для генерации
     """
     generator = PostGenerator()
 
     if request.news_id:
-        news_item = db.query(NewsItem).filter(
-            NewsItem.id == request.news_id
-        ).first()
+        result = await db.execute(
+            select(NewsItem).filter(NewsItem.id == request.news_id)
+        )
+        news_item = result.scalar_one_or_none()
         if not news_item:
-            raise HTTPException(
-                status_code=404, detail="Новость не найдена"
-            )
+            raise not_found_error("Новость не найдена")
+
+        should_generate, reason = await should_generate_post(news_item, db)
+        if not should_generate:
+            raise bad_request_error(f"Новость не прошла фильтрацию: {reason}")
 
         news_text = f"{news_item.title}\n\n{news_item.summary}"
         if news_item.raw_text:
@@ -474,34 +488,121 @@ async def generate_post(
     elif request.text:
         news_text = request.text
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Необходимо указать либо news_id, либо text"
-        )
+        raise bad_request_error("Необходимо указать либо news_id, либо text")
 
     try:
-        generated_text = generator.generate_post(
+        generated_text = await asyncio.to_thread(
+            generator.generate_post,
             news_text=news_text,
             custom_prompt=request.custom_prompt
         )
+
+        if request.news_id:
+            await create_or_update_post(
+                db=db,
+                news_id=request.news_id,
+                generated_text=generated_text,
+                status=PostStatus.GENERATED
+            )
 
         return GenerateResponse(
             generated_text=generated_text,
             news_id=request.news_id
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except AIProviderError as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"Ошибка AI провайдера: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Ошибка при генерации поста: {str(e)}"
-        )
+        raise bad_request_error(str(e))
+    except (AIProviderError, Exception) as e:
+        logger.error(f"Ошибка при генерации поста: {e}", exc_info=True)
+        raise server_error(f"Ошибка при генерации поста: {str(e)}")
+
+
+@router.post(
+    "/publish",
+    response_model=PublishResponse,
+    summary="Опубликовать пост в Telegram-канал вручную"
+)
+async def publish_post(
+    request: PublishRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Публикация поста в Telegram-канал.
+
+    - `post_id`: ID поста из БД
+    - `text`: Произвольный текст для публикации
+    - `channel_username`: Username канала
+    """
+    if not request.post_id and not request.text:
+        raise bad_request_error("Необходимо указать либо post_id, либо text")
+
+    if not settings.TELEGRAM_API_ID or not settings.TELEGRAM_API_HASH:
+        raise server_error("TELEGRAM_API_ID и TELEGRAM_API_HASH не настроены")
+
+    if not settings.TELEGRAM_CHANNEL_USERNAME and not request.channel_username:
+        raise server_error("TELEGRAM_CHANNEL_USERNAME не настроен")
+
+    channel = (
+        request.channel_username or settings.TELEGRAM_CHANNEL_USERNAME
+    )
+    publisher = TelegramPublisher(
+        api_id=settings.TELEGRAM_API_ID,
+        api_hash=settings.TELEGRAM_API_HASH,
+        channel_username=channel
+    )
+
+    try:
+        if request.post_id:
+            result = await db.execute(
+                select(Post).filter(Post.id == request.post_id)
+            )
+            post = result.scalar_one_or_none()
+            if not post:
+                raise not_found_error(f"Пост с ID {request.post_id} не найден")
+
+            if post.status == PostStatus.PUBLISHED and post.published_at:
+                return create_publish_response(
+                    success=False,
+                    message=f"Пост #{request.post_id} уже был опубликован",
+                    post_id=request.post_id
+                )
+
+            text_to_publish = post.generated_text
+            telegram_message_id = await publisher.publish_post(
+                text=text_to_publish,
+                post_id=request.post_id,
+                db=db
+            )
+            success = telegram_message_id is not None
+            return create_publish_response(
+                success=success,
+                message=(
+                    f"Пост #{request.post_id} успешно опубликован"
+                    if success
+                    else f"Не удалось опубликовать пост #{request.post_id}"
+                ),
+                telegram_message_id=telegram_message_id,
+                post_id=request.post_id
+            )
+
+        elif request.text:
+            telegram_message_id = await publisher.publish_post(
+                text=request.text
+            )
+            success = telegram_message_id is not None
+            return create_publish_response(
+                success=success,
+                message=(
+                    "Текст успешно опубликован"
+                    if success
+                    else "Не удалось опубликовать текст"
+                ),
+                telegram_message_id=telegram_message_id
+            )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"Ошибка при генерации поста: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Ошибка при генерации поста: {str(e)}"
-        )
+        logger.error(f"Ошибка при публикации поста: {e}", exc_info=True)
+        raise server_error(f"Ошибка при публикации: {str(e)}")
+    finally:
+        await publisher.disconnect()
