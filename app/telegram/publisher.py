@@ -1,6 +1,3 @@
-"""
-Публикация постов в Telegram-канал через Telethon
-"""
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -18,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramPublisher:
-    """Класс для публикации постов в Telegram-канал"""
+    """Класс для публикации постов в Telegram-канал."""
 
     def __init__(
         self,
@@ -26,14 +23,7 @@ class TelegramPublisher:
         api_hash: Optional[str] = None,
         channel_username: Optional[str] = None
     ):
-        """
-        Инициализация публикатора
 
-        Args:
-            api_id: API ID из my.telegram.org
-            api_hash: API Hash из my.telegram.org
-            channel_username: Username канала (без @) или ID канала
-        """
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
         self.channel_username = (
@@ -42,17 +32,11 @@ class TelegramPublisher:
 
         if not self.api_id or not self.api_hash:
             raise ValueError(
-                "Не указаны TELEGRAM_API_ID и TELEGRAM_API_HASH. "
-                "Установите их в переменных окружения "
-                "или передайте напрямую."
-            )
+                "Не указаны TELEGRAM_API_ID и TELEGRAM_API_HASH. ")
 
         if not self.channel_username:
             raise ValueError(
-                "Не указан TELEGRAM_CHANNEL_USERNAME. "
-                "Установите его в переменных окружения "
-                "или передайте напрямую."
-            )
+                "Не указан TELEGRAM_CHANNEL_USERNAME. ")
 
         session_name = getattr(
             settings, 'TELEGRAM_SESSION_NAME', 'telegram_session'
@@ -70,7 +54,7 @@ class TelegramPublisher:
         )
 
     async def connect(self):
-        """Подключиться к Telegram"""
+        """Подключиться к Telegram."""
         if not self.client.is_connected():
             try:
                 await self.client.connect()
@@ -103,7 +87,7 @@ class TelegramPublisher:
                 raise
 
     async def disconnect(self):
-        """Отключиться от Telegram"""
+        """Отключиться от Telegram."""
         if self.client.is_connected():
             await self.client.disconnect()
             logger.info("Отключено от Telegram")
@@ -114,14 +98,7 @@ class TelegramPublisher:
         post_id: Optional[int],
         db: Optional[AsyncSession]
     ) -> None:
-        """
-        Обновить статус поста на FAILED
-
-        Args:
-            post: Объект поста (если None, будет получен из БД по post_id)
-            post_id: ID поста
-            db: Сессия БД
-        """
+        """Обновить статус поста на FAILED."""
         if not post_id or not db:
             return
 
@@ -149,19 +126,7 @@ class TelegramPublisher:
         db: Optional[AsyncSession] = None,
         channel_username: Optional[str] = None
     ) -> Optional[int]:
-        """
-        Опубликовать пост в канал
-
-        Args:
-            text: Текст поста для публикации
-            post_id: ID поста в БД (для обновления статуса)
-            db: Сессия БД (для проверки и обновления статуса)
-            channel_username: Username канала
-                (если не указан при инициализации)
-
-        Returns:
-            ID сообщения в Telegram или None при ошибке
-        """
+        """Опубликовать пост в канал."""
         if not text or not text.strip():
             error_msg = "Текст поста не может быть пустым"
             logger.error(error_msg)
@@ -268,12 +233,7 @@ class TelegramPublisher:
             return None
 
     async def test_connection(self) -> bool:
-        """
-        Проверить подключение к Telegram и доступ к каналу
-
-        Returns:
-            True если все работает, False в противном случае
-        """
+        """Проверить подключение к Telegram и доступ к каналу."""
         try:
             await self.connect()
             channel = self.channel_username.lstrip('@')
