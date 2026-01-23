@@ -1,6 +1,3 @@
-"""
-Парсер новостей из Telegram-каналов
-"""
 import logging
 from datetime import datetime
 
@@ -22,22 +19,7 @@ DEFAULT_PARSE_LIMIT = 100
 
 
 class TelegramChannelParser:
-    """
-    Парсер для получения новостей из публичных Telegram-каналов
-
-    Примеры использования:
-
-    # Парсинг канала по username
-    parser = TelegramChannelParser(
-        api_id=12345,
-        api_hash='your_api_hash',
-        channel_username='channel_name'
-    )
-    news = await parser.parse()
-
-    # Парсинг последних N сообщений
-    news = await parser.parse(limit=50)
-    """
+    """Парсер новостей из публичных Telegram-каналов."""
 
     def __init__(
         self,
@@ -45,25 +27,13 @@ class TelegramChannelParser:
         api_id: int | None = None,
         api_hash: str | None = None
     ):
-        """
-        Инициализация парсера Telegram-канала
-
-        Args:
-            channel_username: Username канала (без @) или ID канала
-            api_id: API ID из my.telegram.org
-                (если не указан, берется из настроек)
-            api_hash: API Hash из my.telegram.org
-                (если не указан, берется из настроек)
-        """
         self.channel_username = channel_username.lstrip('@')
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
 
         if not self.api_id or not self.api_hash:
             raise ValueError(
-                "Не указаны TELEGRAM_API_ID и TELEGRAM_API_HASH. "
-                "Установите их в переменных окружения или передайте напрямую."
-            )
+                "Не указаны TELEGRAM_API_ID и TELEGRAM_API_HASH. ")
 
         self.client = TelegramClient(
             'telegram_parser_session',
@@ -82,15 +52,7 @@ class TelegramChannelParser:
             logger.info("Отключено от Telegram")
 
     def _extract_text(self, message: Message) -> str:
-        """
-        Извлекает текст из сообщения
-
-        Args:
-            message: Объект сообщения из Telethon
-
-        Returns:
-            Текст сообщения
-        """
+        """Извлекает текст из сообщения."""
         text = message.message or ''
 
         if message.media:
@@ -106,16 +68,7 @@ class TelegramChannelParser:
     def _extract_url(
         self, message: Message, channel_username: str
     ) -> str | None:
-        """
-        Формирует URL сообщения в канале
-
-        Args:
-            message: Объект сообщения из Telethon
-            channel_username: Username канала
-
-        Returns:
-            URL сообщения или None
-        """
+        """Формирует URL сообщения в канале."""
         if message.id:
             return TELEGRAM_URL_TEMPLATE.format(
                 channel=channel_username,
@@ -126,46 +79,33 @@ class TelegramChannelParser:
     def _parse_message(
         self, message: Message, channel_username: str
     ) -> dict | None:
-        """
-        Преобразует сообщение Telegram в формат новости
-
-        Args:
-            message: Объект сообщения из Telethon
-            channel_username: Username канала
-
-        Returns:
-            Словарь с данными новости или None
-        """
+        """Преобразует сообщение Telegram в формат новости."""
         try:
             text = self._extract_text(message)
-
             if not text or len(text) < MIN_TEXT_LENGTH:
                 return None
 
-            text_length = len(text)
-            if text_length > MAX_TITLE_LENGTH:
-                title = text[:MAX_TITLE_LENGTH] + '...'
-            else:
-                title = text
+            title = (
+                text[:MAX_TITLE_LENGTH] + '...'
+                if len(text) > MAX_TITLE_LENGTH else text
+            )
             title = title.split('\n')[0].strip()
+            summary = (
+                text[MAX_TITLE_LENGTH:].strip()
+                if len(text) > MAX_TITLE_LENGTH else ''
+            )
 
-            if text_length > MAX_TITLE_LENGTH:
-                summary = text[MAX_TITLE_LENGTH:].strip()
+            if message.date and message.date.tzinfo:
+                published_at = message.date.replace(tzinfo=None)
             else:
-                summary = ''
-
-            url = self._extract_url(message, channel_username)
-
-            published_at = message.date
-            if published_at and published_at.tzinfo:
-                published_at = published_at.replace(tzinfo=None)
+                published_at = message.date or datetime.now()
 
             return {
                 'title': title,
-                'url': url,
+                'url': self._extract_url(message, channel_username),
                 'summary': summary,
                 'source': channel_username,
-                'published_at': published_at or datetime.now(),
+                'published_at': published_at,
                 'raw_text': text
             }
         except Exception as e:
@@ -176,23 +116,7 @@ class TelegramChannelParser:
             return None
 
     async def parse(self, limit: int = DEFAULT_PARSE_LIMIT) -> list[dict]:
-        """
-        Парсит сообщения из Telegram-канала
-
-        Args:
-            limit: Максимальное количество сообщений для парсинга
-
-        Returns:
-            Список словарей с новостями:
-            {
-                'title': str,
-                'url': str,
-                'summary': str,
-                'source': str,
-                'published_at': datetime,
-                'raw_text': str
-            }
-        """
+        """Парсит сообщения из Telegram-канала"""
         await self._connect()
 
         try:
