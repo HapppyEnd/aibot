@@ -447,7 +447,10 @@ async def get_filtered_news(
     all_news = result.scalars().all()
     filtered_news = []
     for news_item in all_news:
-        should_generate, _ = await should_generate_post(news_item, db)
+        should_generate, _ = await should_generate_post(
+            news_item, db,
+            check_keywords=False
+        )
         if should_generate:
             filtered_news.append(news_item)
             if len(filtered_news) >= limit:

@@ -1,7 +1,10 @@
 """
 FastAPI приложение для AI-генератора постов для Telegram
 """
+from __future__ import annotations
+
 import logging
+from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -10,17 +13,6 @@ from fastapi import FastAPI
 from app.api.endpoints import router
 from app.config import settings
 from app.database import init_db
-
-app = FastAPI(
-    title="AI-генератор постов для Telegram",
-    description=(
-        "Сервис для автоматической генерации и публикации "
-        "постов в Telegram-канал"
-    ),
-    version="1.0.0"
-)
-
-app.include_router(router, prefix="/api", tags=["api"])
 
 
 def setup_logging():
@@ -64,11 +56,47 @@ def setup_logging():
     root_logger.addHandler(console_handler)
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Инициализация при запуске приложения"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Управление жизненным циклом приложения
+
+    Args:
+        app: Экземпляр FastAPI приложения
+    """
     setup_logging()
     await init_db()
+
+    from sqlalchemy import select
+
+    from app.database import AsyncSessionLocal
+    from app.models import Source
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Source))
+        sources_count = len(result.scalars().all())
+        logger = logging.getLogger(__name__)
+        logger.info(f"Загружено источников: {sources_count}")
+        if sources_count == 0:
+            logger.info(
+                "Источники не найдены. "
+                "Используйте API /api/sources/ для добавления"
+            )
+
+    yield
+
+
+app = FastAPI(
+    title="AI-генератор постов для Telegram",
+    description=(
+        "Сервис для автоматической генерации и публикации "
+        "постов в Telegram-канал"
+    ),
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.include_router(router, prefix="/api", tags=["api"])
 
 
 @app.get("/")

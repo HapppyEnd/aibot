@@ -8,7 +8,8 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
-from telethon.errors import ChannelInvalidError, UsernameInvalidError
+from telethon.errors import (ChannelInvalidError, FloodWaitError,
+                             UsernameInvalidError)
 
 from app.config import settings
 from app.models import Post, PostStatus
@@ -42,17 +43,28 @@ class TelegramPublisher:
         if not self.api_id or not self.api_hash:
             raise ValueError(
                 "Не указаны TELEGRAM_API_ID и TELEGRAM_API_HASH. "
-                "Установите их в переменных окружения или передайте напрямую."
+                "Установите их в переменных окружения "
+                "или передайте напрямую."
             )
 
         if not self.channel_username:
             raise ValueError(
                 "Не указан TELEGRAM_CHANNEL_USERNAME. "
-                "Установите его в переменных окружения или передайте напрямую."
+                "Установите его в переменных окружения "
+                "или передайте напрямую."
             )
 
+        session_name = getattr(
+            settings, 'TELEGRAM_SESSION_NAME', 'telegram_session'
+        )
+        import os
+        if os.path.exists('/app/telegram_sessions'):
+            session_path = f'/app/telegram_sessions/{session_name}'
+        else:
+            session_path = session_name
+
         self.client = TelegramClient(
-            'telegram_publisher_session',
+            session_path,
             self.api_id,
             self.api_hash
         )
@@ -60,8 +72,35 @@ class TelegramPublisher:
     async def connect(self):
         """Подключиться к Telegram"""
         if not self.client.is_connected():
-            await self.client.start()
-            logger.info("Подключено к Telegram")
+            try:
+                await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    raise ValueError(
+                        "Сессия Telegram не авторизована. "
+                        "Используйте API эндпоинт "
+                        "/api/telegram/auth для авторизации."
+                    )
+
+                me = await self.client.get_me()
+                if me:
+                    logger.info(
+                        f"Подключено к Telegram как {me.first_name} "
+                        f"(@{me.username})"
+                    )
+                else:
+                    logger.warning(
+                        "Подключено к Telegram, но пользователь не авторизован"
+                    )
+            except ValueError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"Ошибка при подключении к Telegram: {e}. "
+                    f"Убедитесь, что сессия авторизована. "
+                    f"Используйте API эндпоинт /api/telegram/auth "
+                    f"для авторизации."
+                )
+                raise
 
     async def disconnect(self):
         """Отключиться от Telegram"""
@@ -152,8 +191,32 @@ class TelegramPublisher:
                 f"Публикация поста в канал: {channel}"
                 + (f" (ID поста: {post_id})" if post_id else "")
             )
-            message = await self.client.send_message(channel, text)
-            telegram_message_id = message.id
+
+            max_retries = 3
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    message = await self.client.send_message(channel, text)
+                    telegram_message_id = message.id
+                    break
+                except FloodWaitError as e:
+                    wait_time = e.seconds
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(
+                            f"Telegram FloodWait: нужно подождать "
+                            f"{wait_time} секунд. "
+                            f"Попытка {retry_count}/{max_retries}..."
+                        )
+                        import asyncio
+                        await asyncio.sleep(wait_time + 1)
+                    else:
+                        logger.error(
+                            f"Telegram FloodWait: превышен лимит после "
+                            f"{max_retries} попыток. "
+                            f"Нужно подождать {wait_time} секунд."
+                        )
+                        raise
 
             if post_id and db:
                 try:
@@ -179,6 +242,15 @@ class TelegramPublisher:
             )
             return telegram_message_id
 
+        except FloodWaitError as e:
+            error_msg = (
+                f"❌ Telegram FloodWait: нужно подождать {e.seconds} секунд "
+                f"перед следующей публикацией"
+            )
+            logger.error(error_msg)
+
+            await self._mark_post_as_failed(post, post_id, db)
+            return None
         except (ChannelInvalidError, UsernameInvalidError) as e:
             error_msg = (
                 f"❌ Ошибка: канал '{channel}' не найден "

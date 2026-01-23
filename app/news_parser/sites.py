@@ -49,13 +49,38 @@ class SiteParser(ABC):
             Response объект или None при ошибке
         """
         try:
+            logger.debug(f"Выполнение запроса к {url}")
             response = requests.get(
                 url,
                 headers={'User-Agent': DEFAULT_USER_AGENT},
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
+            logger.debug(
+                f"Успешный ответ от {url}, "
+                f"статус: {response.status_code}"
+            )
             return response
+        except requests.exceptions.Timeout:
+            logger.error(
+                f"Таймаут при запросе к {url} "
+                f"(>{REQUEST_TIMEOUT} сек)"
+            )
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Ошибка подключения к {url}: {e}")
+            return None
+        except requests.exceptions.HTTPError as e:
+            status_code = (
+                e.response.status_code
+                if hasattr(e, 'response') and e.response
+                else 'unknown'
+            )
+            logger.error(
+                f"HTTP ошибка при запросе к {url}: {e} "
+                f"(статус: {status_code})"
+            )
+            return None
         except requests.RequestException as e:
             logger.error(f"Ошибка при запросе к {url}: {e}")
             return None
@@ -347,18 +372,36 @@ class UniversalHTMLParser(SiteParser):
 
     def parse(self):
         """Парсит HTML страницу по настроенным селекторам"""
-        response = self._make_request(self._normalize_url())
+        url = self._normalize_url()
+        logger.debug(f"Парсинг HTML страницы: {url}")
+
+        response = self._make_request(url)
         if not response:
+            logger.warning(f"Не удалось получить ответ от {url}")
             return []
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            logger.debug(
+                f"HTML страница загружена, "
+                f"размер: {len(response.text)} символов"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге HTML с {url}: {e}")
+            return []
 
         containers = soup.select(self.selectors['container'])
+        logger.debug(
+            f"Найдено {len(containers)} контейнеров "
+            f"по селектору '{self.selectors['container']}'"
+        )
+
         if not containers:
             logger.warning(
                 f"Не найдены элементы по селектору "
                 f"'{self.selectors['container']}' "
-                f"на {self.base_url}"
+                f"на {self.base_url}. "
+                f"Попробуйте настроить другие селекторы для этого сайта."
             )
             return []
 

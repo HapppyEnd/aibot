@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_FILTER_REQUIRED_LANGUAGE: str | None = None
 DEFAULT_FILTER_REQUIRED_SOURCE_IDS: list[int] | None = None
 DEFAULT_FILTER_EXCLUDE_SOURCE_IDS: list[int] | None = None
-DEFAULT_FILTER_CHECK_KEYWORDS: bool = True
+DEFAULT_FILTER_CHECK_KEYWORDS: bool = False
 DEFAULT_FILTER_CHECK_DUPLICATES: bool = True
 
 

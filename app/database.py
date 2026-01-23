@@ -7,15 +7,15 @@ from sqlalchemy.orm import declarative_base
 
 from app.config import settings
 
-# Создаем async движок БД
-# Для PostgreSQL используем asyncpg драйвер
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
-    future=True
+    future=True,
+    connect_args={
+        "ssl": False
+    }
 )
 
-# Создаем фабрику async сессий
 AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -24,15 +24,12 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False
 )
 
-# Базовый класс для моделей
 Base = declarative_base()
 
 
 async def init_db():
     """Инициализация базы данных - создание таблиц"""
     async with engine.begin() as conn:
-        # Импортируем модели для создания таблиц
-        # Импорт должен быть после определения Base
         from app import models  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 

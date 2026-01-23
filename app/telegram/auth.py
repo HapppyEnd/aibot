@@ -46,8 +46,14 @@ async def authorize_telegram(
     session_name = getattr(
         settings, 'TELEGRAM_SESSION_NAME', 'telegram_session'
     )
+    import os
+    if os.path.exists('/app/telegram_sessions'):
+        session_path = f'/app/telegram_sessions/{session_name}'
+    else:
+        session_path = session_name
+
     client = TelegramClient(
-        session_name,
+        session_path,
         settings.TELEGRAM_API_ID,
         settings.TELEGRAM_API_HASH
     )

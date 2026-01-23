@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -31,6 +29,58 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build: .
+    container_name: aibot_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - telegram_sessions:/app/telegram_sessions
+    restart: unless-stopped
+
+  celery_worker:
+    build: .
+    container_name: aibot_celery_worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - telegram_sessions:/app/telegram_sessions
+    restart: unless-stopped
+
+  celery_beat:
+    build: .
+    container_name: aibot_celery_beat
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - celery_beat_data:/app/celery_beat_data
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
+  telegram_sessions:
+  celery_beat_data:
