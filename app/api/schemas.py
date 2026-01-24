@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class SourceType(str, Enum):
@@ -16,11 +16,28 @@ class PostStatus(str, Enum):
     FAILED = "failed"
 
 
+def _normalize_source_type(v):
+    """Приводит type к нижнему регистру для БД (site/tg)."""
+    if isinstance(v, SourceType):
+        return v
+    s = str(v).strip().lower()
+    if s in ("site",):
+        return "site"
+    if s in ("telegram", "tg"):
+        return "tg"
+    return v
+
+
 class SourceBase(BaseModel):
     type: SourceType
     name: str
     url: str  # URL для сайтов, username для Telegram-каналов
     enabled: bool = True
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v):
+        return _normalize_source_type(v)
 
 
 class SourceCreate(SourceBase):

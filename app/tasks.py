@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from celery import Celery
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.ai.generator import AIProviderError, PostGenerator
 from app.config import settings
@@ -21,11 +22,12 @@ TASK_TIME_LIMIT_SECONDS = 30 * 60
 TASK_SOFT_TIME_LIMIT_SECONDS = 25 * 60
 WORKER_PREFETCH_MULTIPLIER = 1
 
-PARSE_SOURCES_INTERVAL_SECONDS = 1800.0
-PROCESS_NEWS_INTERVAL_SECONDS = 1800.0
+PARSE_SOURCES_INTERVAL_SECONDS = 60.0
+PROCESS_NEWS_INTERVAL_SECONDS = 60.0
 
 GENERATE_POST_RATE_LIMIT = '2/s'
-PUBLISH_POST_RATE_LIMIT = '0.0033/s'
+# Для теста: 1 пост в секунду (было 0.0033/s = ~1 пост в 5 минут)
+PUBLISH_POST_RATE_LIMIT = '1/s'
 
 TELEGRAM_PARSE_LIMIT = 100
 NEWS_ITEMS_PROCESS_LIMIT = 100
@@ -33,7 +35,7 @@ PUBLISH_BATCH_LIMIT = 10
 
 GENERATE_DELAY_BASE_SECONDS = 10.0
 GENERATE_DELAY_INCREMENT_SECONDS = 2.0
-PUBLISH_DELAY_AFTER_GENERATION_SECONDS = 60
+PUBLISH_DELAY_AFTER_GENERATION_SECONDS = 5  # Для теста: 5 секунд (было 60)
 PUBLISH_BATCH_DELAY_SECONDS = 5
 
 GENERATE_MAX_RETRIES = 3
@@ -53,7 +55,6 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
-    broker_connection_retry_on_startup=True,
     task_track_started=True,
     task_time_limit=TASK_TIME_LIMIT_SECONDS,
     task_soft_time_limit=TASK_SOFT_TIME_LIMIT_SECONDS,
@@ -88,11 +89,10 @@ def run_async(coro):
 
 
 async def _save_news_items(news_items: list[dict], source_id: int):
-    """Сохраняет новости в БД."""
+    """Сохраняет новости в БД. Игнорирует дубликаты (race condition)."""
 
     async with AsyncSessionLocal() as db:
         saved_count = 0
-        skipped_count = 0
         for item in news_items:
             try:
                 news_id = hashlib.md5(
@@ -103,7 +103,6 @@ async def _save_news_items(news_items: list[dict], source_id: int):
                 )
                 existing = result.scalar_one_or_none()
                 if existing:
-                    skipped_count += 1
                     continue
                 published_at = (
                     item.get('published_at') or
@@ -122,26 +121,15 @@ async def _save_news_items(news_items: list[dict], source_id: int):
                     raw_text=item.get('raw_text')
                 )
                 db.add(news_item)
-                try:
-                    await db.commit()
-                    saved_count += 1
-                except Exception as commit_error:
-                    await db.rollback()
-                    # Проверяем, не дубликат ли это
-                    from sqlalchemy.exc import IntegrityError
-                    if isinstance(commit_error, IntegrityError):
-                        # Дубликат - пропускаем
-                        skipped_count += 1
-                    else:
-                        logger.error(
-                            f"Ошибка при сохранении новости {news_id}: "
-                            f"{commit_error}",
-                            exc_info=True
-                        )
-            except Exception as e:
-                logger.error(
-                    f"Ошибка при обработке новости: {e}", exc_info=True)
+                await db.commit()
+                saved_count += 1
+            except IntegrityError:
                 await db.rollback()
+                continue
+            except Exception as e:
+                await db.rollback()
+                logger.error(
+                    f"Ошибка при сохранении новости: {e}", exc_info=True)
                 continue
 
         if saved_count > 0:
@@ -152,6 +140,7 @@ async def _save_news_items(news_items: list[dict], source_id: int):
 @celery_app.task(name='parse_all_sources')
 def parse_all_sources():
     """Парсит все источники новостей."""
+
     run_async(_parse_all_sources_async())
 
 
@@ -162,12 +151,21 @@ async def _parse_all_sources_async():
             select(Source).filter(Source.enabled.is_(True))
         )
         sources = result.scalars().all()
+        logger.info(f"Найдено {len(sources)} источников для парсинга")
 
         for source in sources:
+            logger.info(
+                f"Парсинг источника: {source.name} "
+                f"(тип: {source.type}, URL: {source.url})"
+            )
             try:
                 if source.type == SourceType.SITE:
-                    if (source.url.endswith('.xml') or
-                            source.url.endswith('.rss')):
+                    is_rss = (
+                        source.url.endswith('.xml') or
+                        source.url.endswith('.rss') or
+                        '/rss' in source.url.lower()
+                    )
+                    if is_rss:
                         parser = RSSParser(source.url, source.name)
                     else:
                         from app.news_parser.sites import UniversalHTMLParser
@@ -188,13 +186,19 @@ async def _parse_all_sources_async():
                             source_name=source.name,
                             selectors=default_selectors
                         )
-
                     news_items = parser.parse()
                     if news_items:
                         for item in news_items:
                             item['source'] = source.name
-                        await _save_news_items(news_items, source.id)
-
+                        saved = await _save_news_items(news_items, source.id)
+                        logger.info(
+                            f"Источник '{source.name}': собрано "
+                            f"{len(news_items)} новостей, сохранено {saved}"
+                        )
+                    else:
+                        logger.info(
+                            f"Источник '{source.name}': новости не найдены"
+                        )
                 elif source.type == SourceType.TELEGRAM:
                     channel_username = source.url.lstrip('@')
                     parser = TelegramChannelParser(
@@ -203,7 +207,15 @@ async def _parse_all_sources_async():
                     if news_items:
                         for item in news_items:
                             item['source'] = source.name
-                        await _save_news_items(news_items, source.id)
+                        saved = await _save_news_items(news_items, source.id)
+                        logger.info(
+                            f"Источник '{source.name}': собрано "
+                            f"{len(news_items)} новостей, сохранено {saved}"
+                        )
+                    else:
+                        logger.info(
+                            f"Источник '{source.name}': новости не найдены"
+                        )
 
             except Exception as e:
                 logger.error(
@@ -219,23 +231,40 @@ def process_news_items():
 async def _process_news_items_async():
     """Асинхронная функция для обработки новостей."""
     async with AsyncSessionLocal() as db:
+        from sqlalchemy.orm import selectinload
         result = await db.execute(
             select(NewsItem)
             .join(Source, NewsItem.source_id == Source.id)
             .where(Source.enabled.is_(True))
+            .options(selectinload(NewsItem.source_obj))
             .order_by(NewsItem.published_at.desc())
             .limit(NEWS_ITEMS_PROCESS_LIMIT)
         )
         news_items = result.scalars().unique().all()
         processed_count = 0
         skipped_count = 0
+        source_stats = {}
+
         for news_item in news_items:
             try:
+                source_name = (
+                    news_item.source_obj.name
+                    if news_item.source_obj
+                    else f"source_id={news_item.source_id}"
+                )
+                if source_name not in source_stats:
+                    source_stats[source_name] = {
+                        'processed': 0, 'skipped': 0, 'reasons': {}
+                    }
                 should_generate, reason = await should_generate_post(
                     news_item, db,
                     check_keywords=False
                 )
                 if not should_generate:
+                    source_stats[source_name]['skipped'] += 1
+                    if reason not in source_stats[source_name]['reasons']:
+                        source_stats[source_name]['reasons'][reason] = 0
+                    source_stats[source_name]['reasons'][reason] += 1
                     skipped_count += 1
                     continue
 
@@ -245,7 +274,7 @@ async def _process_news_items_async():
                         Post.status == PostStatus.PUBLISHED
                     )
                 )
-                if result_posts.scalar_one_or_none():
+                if result_posts.scalars().first():
                     skipped_count += 1
                     continue
 
@@ -255,7 +284,7 @@ async def _process_news_items_async():
                         Post.status.in_([PostStatus.GENERATED, PostStatus.NEW])
                     ).order_by(Post.id.desc())
                 )
-                if result_generating.scalar_one_or_none():
+                if result_generating.scalars().first():
                     skipped_count += 1
                     continue
 
@@ -267,6 +296,7 @@ async def _process_news_items_async():
                     await asyncio.sleep(delay)
                 generate_post_for_news.delay(news_item.id)
                 processed_count += 1
+                source_stats[source_name]['processed'] += 1
             except Exception as e:
                 logger.error(
                     f"Ошибка при обработке новости {news_item.id}: {e}",
@@ -276,6 +306,12 @@ async def _process_news_items_async():
             f"Обработка завершена: {processed_count} постов "
             f"запущено на генерацию, {skipped_count} пропущено"
         )
+        for source_name, stats in source_stats.items():
+            logger.info(
+                f"Источник '{source_name}': {stats['processed']} обработано, "
+                f"{stats['skipped']} пропущено. "
+                f"Причины пропуска: {stats['reasons']}"
+            )
 
 
 @celery_app.task(
@@ -298,7 +334,6 @@ async def _generate_post_for_news_async(news_id: str):
         news_item = result.scalar_one_or_none()
 
         if not news_item:
-            logger.warning(f"Новость {news_id} не найдена")
             return None
 
         try:
@@ -307,36 +342,39 @@ async def _generate_post_for_news_async(news_id: str):
             else:
                 news_text = f"{news_item.title}\n\n{news_item.summary}"
 
-            if not news_text or not news_text.strip():
-                logger.error(f"Пустой текст новости {news_id}")
-                return None
+            result_existing = await db.execute(
+                select(Post).filter(
+                    Post.news_id == news_id
+                ).order_by(Post.id.desc()).limit(1).with_for_update()
+            )
+            existing_post = result_existing.scalar_one_or_none()
 
+            if existing_post:
+                return None
             generator = PostGenerator()
             generated_text = await asyncio.to_thread(
                 generator.generate_post,
                 news_text=news_text
             )
-
-            result_posts = await db.execute(
-                select(Post).filter(
-                    Post.news_id == news_id,
-                    Post.status == PostStatus.GENERATED
-                ).order_by(Post.id.desc())
+            post = Post(
+                news_id=news_id,
+                generated_text=generated_text,
+                status=PostStatus.GENERATED
             )
-            existing_post = result_posts.scalar_one_or_none()
-
-            if existing_post:
-                existing_post.generated_text = generated_text
-                post = existing_post
-            else:
-                post = Post(
-                    news_id=news_id,
-                    generated_text=generated_text,
-                    status=PostStatus.GENERATED
+            db.add(post)
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                result_existing = await db.execute(
+                    select(Post).filter(
+                        Post.news_id == news_id
+                    ).order_by(Post.id.desc()).limit(1)
                 )
-                db.add(post)
-
-            await db.commit()
+                existing_post = result_existing.scalar_one_or_none()
+                if existing_post:
+                    return None
+                raise
             await db.refresh(post)
 
             logger.info(f"Пост {post.id} сгенерирован для новости {news_id}")
@@ -346,31 +384,9 @@ async def _generate_post_for_news_async(news_id: str):
             )
             return {"news_id": news_id, "post_id": post.id}
         except AIProviderError as e:
-            logger.error(
-                f"Ошибка AI генерации для новости {news_id}: {e}",
-                exc_info=True
-            )
-            # Помечаем пост как failed, если он существует
-            try:
-                result_posts = await db.execute(
-                    select(Post).filter(
-                        Post.news_id == news_id,
-                        Post.status.in_([PostStatus.NEW, PostStatus.GENERATED])
-                    ).order_by(Post.id.desc())
-                )
-                existing_post = result_posts.scalar_one_or_none()
-                if existing_post:
-                    existing_post.status = PostStatus.FAILED
-                    await db.commit()
-            except Exception as db_error:
-                logger.error(
-                    f"Ошибка при обновлении статуса поста: {db_error}"
-                )
+            logger.error(f"Ошибка AI генерации {news_id}: {e}")
         except Exception as e:
-            logger.error(
-                f"Ошибка генерации для новости {news_id}: {e}",
-                exc_info=True
-            )
+            logger.error(f"Ошибка генерации {news_id}: {e}", exc_info=True)
         return None
 
 
@@ -393,19 +409,9 @@ async def _publish_post_async(post_id: int):
         )
         post = result.scalar_one_or_none()
         if not post:
+            logger.warning(f"Пост {post_id} не найден в БД")
             return
         if post.status == PostStatus.PUBLISHED and post.published_at:
-            return
-
-        if not post.generated_text or not post.generated_text.strip():
-            logger.error(f"Пост {post_id} имеет пустой generated_text")
-            try:
-                post.status = PostStatus.FAILED
-                await db.commit()
-            except Exception as db_error:
-                logger.error(
-                    f"Ошибка при обновлении статуса поста: {db_error}"
-                )
             return
 
         publisher = None

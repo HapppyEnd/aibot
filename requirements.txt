@@ -7,35 +7,30 @@ pydantic-settings==2.1.0
 # Celery и брокер сообщений
 celery==5.3.4
 redis==5.0.1
-# Альтернатива: можно использовать rabbitmq вместо redis
-# kombu==5.3.4  # если используете RabbitMQ
+
 
 # База данных
 sqlalchemy[asyncio]==2.0.23
 alembic==1.12.1
-asyncpg==0.29.0  # Async драйвер для PostgreSQL
-psycopg2-binary==2.9.9  # Синхронный драйвер для PostgreSQL (для Alembic)
+asyncpg==0.29.0  
+psycopg2-binary==2.9.9 
 
 # Telegram
 telethon==1.34.0
 
-# AI Provider (SberGigaChat - российский, бесплатный тариф)
+# AI Provider (SberGigaChat)
 gigachat>=0.1.0
 
 # Парсинг веб-страниц
-requests==2.31.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
 feedparser==6.0.10
 
-# Работа с переменными окружения
 python-dotenv==1.0.0
 
 # Утилиты
 python-dateutil==2.8.2
 pytz==2023.3
 langdetect==1.0.9
-httpx==0.25.2  # Для проверки API эндпоинтов
-
-# Логирование (встроено в Python, но можно добавить для улучшения)
-# loguru==0.7.2  # опционально
+httpx==0.25.2  # Асинхронные HTTP-запросы (для API)
+requests==2.31.0  # Синхронные HTTP-запросы (для парсинга)

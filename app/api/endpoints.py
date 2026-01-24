@@ -147,9 +147,7 @@ async def update_source(
     source_update: SourceUpdate,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Обновить информацию об источнике.
-    """
+    """Обновить информацию об источнике."""
     result = await db.execute(
         select(Source).filter(Source.id == source_id)
     )
@@ -174,6 +172,8 @@ async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
     """
     Удалить источник новостей.
     Также удалит все связанные новости и посты.
+    Задачи Celery, связанные с удаленными новостями, завершатся корректно
+    (новость не найдена - это ожидаемое поведение).
     """
     result = await db.execute(
         select(Source).filter(Source.id == source_id)
@@ -238,7 +238,7 @@ async def get_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
 async def create_keyword(
     keyword: KeywordCreate, db: AsyncSession = Depends(get_db)
 ):
-    """Добавить новое ключевое слово для фильтрации новостей."""
+    """Добавить новое ключевое слово."""
 
     result = await db.execute(
         select(Keyword).filter(Keyword.word == keyword.word)
@@ -285,7 +285,7 @@ async def get_posts(
     news_id: str | None = Query(None, description="Фильтр по ID новости"),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получить историю всех постов."""
+    """Получить все посты."""
 
     query = select(Post)
     if status:
@@ -497,7 +497,7 @@ async def generate_post(
     request: GenerateRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Сгенерировать пост на основе новости или произвольного текста."""
+    """Сгенерировать пост."""
     generator = PostGenerator()
 
     if request.news_id:

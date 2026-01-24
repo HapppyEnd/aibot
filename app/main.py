@@ -1,8 +1,3 @@
-"""
-FastAPI приложение для AI-генератора постов для Telegram
-"""
-from __future__ import annotations
-
 import logging
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
@@ -68,15 +63,15 @@ async def lifespan(app: FastAPI):
     from app.models import Source
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Source))
-        sources_count = len(result.scalars().all())
-        logger = logging.getLogger(__name__)
-        logger.info(f"Загружено источников: {sources_count}")
-        if sources_count == 0:
-            logger.info(
-                "Источники не найдены. "
-                "Используйте API /api/sources/ для добавления"
-            )
+        result = await db.execute(
+            select(Source).filter(Source.enabled.is_(True))
+        )
+        enabled = result.scalars().all()
+        sources_count = len(enabled)
+        if sources_count > 0:
+            from app.tasks import parse_all_sources, process_news_items
+            parse_all_sources.delay()
+            process_news_items.delay()
 
     yield
 

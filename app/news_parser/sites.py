@@ -68,8 +68,6 @@ class RSSParser(SiteParser):
     parser = RSSParser('https://habr.com/ru/rss/', 'habr_rss')
     ## Лента.ру
     parser = RSSParser('https://lenta.ru/rss', 'lenta')
-    ## BBC News
-    parser = RSSParser('https://feeds.bbci.co.uk/news/rss.xml', 'bbc')
     """
 
     def __init__(self, rss_url: str, source_name: str):
@@ -81,7 +79,10 @@ class RSSParser(SiteParser):
         try:
             feed = feedparser.parse(self.base_url)
             if feed.bozo:
-                logger.warning(f"Ошибка парсинга RSS: {feed.bozo_exception}")
+                logger.warning(
+                    f"Ошибка парсинга RSS '{self.source}': "
+                    f"{feed.bozo_exception}"
+                )
 
             result = []
             for entry in feed.entries:
@@ -97,9 +98,14 @@ class RSSParser(SiteParser):
                         entry, 'description', ''
                     )
                     if summary:
-                        summary = BeautifulSoup(
-                            summary, 'html.parser'
-                        ).get_text().strip()
+                        try:
+                            summary = BeautifulSoup(
+                                summary, 'lxml'
+                            ).get_text().strip()
+                        except Exception:
+                            summary = BeautifulSoup(
+                                summary, 'html.parser'
+                            ).get_text().strip()
 
                     url = getattr(entry, 'link', None)
                     if not url and entry.links:
@@ -113,11 +119,11 @@ class RSSParser(SiteParser):
                         'published_at': published_at
                     })
                 except Exception as e:
-                    logger.warning(f"Ошибка обработки: {e}")
+                    logger.warning(
+                        f"Ошибка обработки записи RSS '{self.source}': {e}"
+                    )
                     continue
 
-            logger.info(
-                f"RSS парсер '{self.source}' собрал {len(result)} новостей")
             return result
 
         except Exception as e:
@@ -163,13 +169,13 @@ class UniversalHTMLParser(SiteParser):
             return None
 
         url = None
-        if 'url' in self.selectors:
-            url_elem = container.select_one(self.selectors['url'])
-            url = url_elem.get('href', '') if url_elem else None
-        elif title_elem.name == 'a':
+        if title_elem.name == 'a':
             url = title_elem.get('href', '')
         elif title_elem.parent and title_elem.parent.name == 'a':
             url = title_elem.parent.get('href', '')
+        if not url and 'url' in self.selectors:
+            url_elem = container.select_one(self.selectors['url'])
+            url = url_elem.get('href', '') if url_elem else None
         url = self._make_absolute_url(url) if url else None
 
         summary_elem = container.select_one(
@@ -209,8 +215,9 @@ class UniversalHTMLParser(SiteParser):
                 if item:
                     result.append(item)
             except Exception as e:
-                logger.warning(f"Ошибка парсинга элемента: {e}")
+                logger.warning(
+                    f"Ошибка парсинга элемента '{self.source}': {e}"
+                )
                 continue
 
-        logger.info(f"Парсер '{self.source}' собрал {len(result)} новостей")
         return result

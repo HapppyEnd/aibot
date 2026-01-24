@@ -20,15 +20,7 @@ DEFAULT_FILTER_CHECK_DUPLICATES: bool = True
 
 
 def parse_source_ids(source_ids_str: str | None) -> list[int] | None:
-    """
-    Парсинг списка source_id из строки
-
-    Args:
-        source_ids_str: Строка с ID через запятую (например, "1,2,3")
-
-    Returns:
-        Список ID или None
-    """
+    """Парсинг списка source_id из строки."""
     if not source_ids_str:
         return None
     try:
@@ -39,15 +31,7 @@ def parse_source_ids(source_ids_str: str | None) -> list[int] | None:
 
 
 def detect_language(text: str) -> str:
-    """
-    Определение языка текста с помощью langdetect
-
-    Args:
-        text: Текст для анализа
-
-    Returns:
-        Код языка (ISO 639-1, например 'ru', 'en', 'de') или 'unknown'
-    """
+    """Определение языка текста с помощью langdetect."""
     if not text or len(text.strip()) < 3:
         return 'unknown'
 
@@ -67,17 +51,7 @@ async def matches_keywords(
     keywords: list[str],
     db: AsyncSession | None = None
 ) -> bool:
-    """
-    Проверка, содержит ли новость ключевые слова
-
-    Args:
-        news_item: Новость для проверки
-        keywords: Список ключевых слов
-        db: Сессия БД (если None, используется keywords из параметра)
-
-    Returns:
-        True если новость содержит хотя бы одно ключевое слово
-    """
+    """Проверка, содержит ли новость ключевые слова."""
     if not keywords:
         return True
 
@@ -98,16 +72,7 @@ async def is_duplicate(
     news_item: NewsItem,
     db: AsyncSession
 ) -> bool:
-    """
-    Проверка, является ли новость дублем существующей
-
-    Args:
-        news_item: Новость для проверки
-        db: Сессия БД
-
-    Returns:
-        True если найдена похожая новость (по URL или заголовку)
-    """
+    """Проверка, является ли новость дублем существующей."""
     result = await db.execute(
         select(NewsItem).filter(NewsItem.id != news_item.id)
     )
@@ -151,10 +116,7 @@ async def should_generate_post(
             )
     if required_source_ids:
         if news_item.source_id not in required_source_ids:
-            return (
-                False,
-                f"Источник {news_item.source_id} не в списке разрешенных"
-            )
+            return (False, "Источник не в списке разрешенных")
     if exclude_source_ids:
         if news_item.source_id in exclude_source_ids:
             return (False, "Источник в списке исключенных")

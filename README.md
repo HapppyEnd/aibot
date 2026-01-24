@@ -1,167 +1,134 @@
-# Project M4: AI-генератор постов для Telegram 
+# AI-генератор постов для Telegram
 
-## 1. **Введение**
+Сервис для автоматизации новостного Telegram-канала: парсинг новостей (RSS/сайты и Telegram-каналы), генерация постов через **Sber GigaChat**, публикация в канал через **Telethon**. 
+---
 
-Вас взяли работать в стартап, который хочет автоматизировать новостной Telegram-канал на новом уровне.
- Ваша задача — сделать сервис, который не просто парсит новости, но использует ИИ для генерации ярких, лаконичных и интересных постов на основе собранных материалов.
- Публикация должна идти в Telegram-канал по расписанию, с возможностью ручного управления и мониторинга через API.
+## Возможности
 
-Вам предстоит интегрировать несколько сервисов: парсинг новостей (сайты и Telegram-каналы), очередь задач, генерацию постов с помощью AI (например, OpenAI GPT-4), публикацию через Telethon и реализацию панели управления источниками.
+- Парсинг новостей — RSS/сайты и публичные Telegram-каналы
+- Очередь задач (Celery + Redis): парсинг → фильтрация → AI-генерация → публикация
+- AI-генерация постов (GigaChat)
+- Публикация в Telegram-канал через Telethon
+- REST API — CRUD по источникам, ключевым словам, постам и новостям; ручная генерация и публикация
+- Swagger: `/docs`
 
-Срок выполнения — **2 недели**. 4 вебинара. 
+---
 
+## Стек
 
+FastAPI, PostgreSQL, SQLAlchemy 2 (async), Alembic, Celery, Redis, GigaChat, Telethon, feedparser, BeautifulSoup.
 
-## 2. **Функциональные блоки**
+---
 
-### **1. Сбор и парсинг новостей (сайты и Telegram-каналы)**
-
-- Собирать новости не только с сайтов, но и из публичных Telegram-каналов (с помощью Telethon).
-- Для каждого источника реализовать отдельный парсер.
-- По расписанию запускать сбор новостей (каждые 30 минут, Celery Beat).
-- Каждая новость должна содержать: `title`, `url` (если есть), `summary`, `source`, `published_at`.
-
-------
-
-### **2. Очередь задач и асинхронная обработка**
-
-- Использование **Celery** и брокера (**RabbitMQ** или Redis) для обработки задач (парсинг, генерация, публикация).
-- Фоновая цепочка: парсинг → фильтрация → генерация поста через AI → публикация.
-- Все тяжелые операции — в отдельных тасках Celery.
-
-------
-
-### **3. AI-генерация постов**
-
-- Использовать OpenAI GPT-4 или другую AI-модель через публичный API.
-- На вход: текст новости/сводка/пост из Telegram, на выход: сгенерированный пост по заданному промпту.
-- Настроить промпт: “Сделай краткое, интересное описание новости для Telegram-канала, добавь emoji, call to action”.
-- Обработка ошибок API (rate limit, недоступность).
-- Возможность вручную протестировать генерацию через API.
-
-------
-
-### **4. Фильтрация и отбор релевантных новостей**
-
-- Перед генерацией AI фильтровать новости по ключевым словам, языку, источнику.
-- Гибкая система фильтров (через настройки или API).
-- Исключение дублей (смотреть по title/url/контенту).
-
-------
-
-### **5. Публикация в Telegram через Telethon**
-
-- После генерации AI-поста отправлять его в указанный Telegram-канал (через Telethon).
-- Проверять, что пост не был уже опубликован.
-- Логировать успешные публикации и ошибки.
-
-------
-
-### **6. Управление источниками и ключевыми словами (панель администратора через API)**
-
-- REST API для добавления, редактирования, удаления источников новостей (сайты, Telegram-каналы).
-- API для управления списком ключевых слов и фильтров.
-- Эндпоинты для просмотра истории постов, логов ошибок.
-
-------
-
-### **7. Документация API (Swagger)**
-
-- Автоматическая генерация через FastAPI (`/docs`).
-- Документировать основные эндпоинты: новости, генерация, публикация, источники, фильтры.
-
-
-
-## 3. **Структура данных**
-
-**Модель NewsItem:**
-
-- `id` (uuid или hash)
-- `title` (str)
-- `url` (str, optional)
-- `summary` (str)
-- `source` (str)
-- `published_at` (datetime)
-- `raw_text` (str, если из Telegram)
-
-**Модель Post:**
-
-- `id`
-- `news_id`
-- `generated_text` (str)
-- `published_at` (datetime)
-- `status` (new/generated/published/failed)
-
-**Модель Source:**
-
-- `id`
-- `type` (site/tg)
-- `name`
-- `url` (или username для TG)
-- `enabled` (bool)
-
-**Модель Keyword:**
-
-- `id`
-- `word`
-
-
-
-## 4. **Проектная структура**
+## Структура проекта
 
 ```
-/aibot/
+aibot/
 ├── app/
-│   ├── main.py
-│   ├── api/
-│   │   ├── endpoints.py
-│   │   └── schemas.py
-│   ├── news_parser/
-│   │   ├── sites.py
-│   │   └── telegram.py
-│   ├── ai/
-│   │   ├── openai_client.py
-│   │   └── generator.py
-│   ├── telegram/
-│   │   ├── bot.py
-│   │   └── publisher.py
-│   ├── tasks.py
-│   ├── models.py
-│   ├── config.py
-│   └── utils.py
-├── celery_worker.py
-├── requirements.txt
-├── README.md
-└── .env
+│   ├── main.py              # FastAPI, lifespan, логирование
+│   ├── config.py            # Настройки (pydantic-settings)
+│   ├── database.py          # Async SQLAlchemy, сессии
+│   ├── models.py            # Source, Keyword, NewsItem, Post
+│   ├── tasks.py             # Celery: парсинг, генерация, публикация
+│   ├── utils.py             # Фильтрация, дубликаты
+│   ├── ai/                  # GigaChat, генерация постов
+│   ├── api/                 # REST-эндпоинты, schemas, helpers
+│   ├── news_parser/         # Парсеры сайтов и Telegram-каналов
+│   └── telegram/            # Telethon: auth, bot, publisher
+├── alembic/                 # Миграции БД
+├── docker-compose.yml       
+├── Dockerfile
+├── env.example
+└── requirements.txt
 ```
 
-## 
-
-## 5. **Чеклист по функциональности**
-
-| №    | Функция                  | URL/Команда      | Методы | Технологии          |
-| ---- | ------------------------ | ---------------- | ------ | ------------------- |
-| 1    | Сбор новостей (сайты)    | Celery Beat      | -      | Celery, requests    |
-| 2    | Сбор новостей (Telegram) | Celery Beat      | -      | Telethon            |
-| 3    | Фильтрация новостей      | -                | -      | Python, Redis       |
-| 4    | AI-генерация постов      | Celery Task      | -      | OpenAI API, asyncio |
-| 5    | Публикация в Telegram    | Celery Task      | -      | Telethon, Redis     |
-| 6    | API-управление           | `/api/sources/`  | CRUD   | FastAPI             |
-| 7    | API-фильтры              | `/api/keywords/` | CRUD   | FastAPI             |
-| 8    | История постов           | `/api/posts/`    | GET    | FastAPI             |
-| 9    | Генерация вручную        | `/api/generate/` | POST   | FastAPI, OpenAI     |
-| 10   | Документация API         | `/docs/`         | GET    | FastAPI (Swagger)   |
-| 11   | Логирование              | -                | -      | logging             |
+---
 
 
+**Требования:** Docker Engine 20.10+, Docker Compose v2.1+ (для `depends_on` с `condition: service_healthy`).
 
-## 6. **Требования к сдаче**
+1. Скопируйте `env.example` в `.env` и заполните значения (всё необходимое — в примере).
 
-1. **GitHub-репозиторий** с полным кодом проекта.
-2. **README.md** с описанием, структурой, инструкцией по запуску, примером API-запросов.
-3. (По желанию) — docker-compose файл, скринкаст работы или демонстрационный Telegram-канал.
-4. Ссылка на репозиторий + ФИО и учебную группу прислать преподавателю.
-5. **Чек-лист** с отметками по реализации (можно приложить отдельно).
+2. Запустите сервисы:
 
-## Дедлайн
-1 января 2026 23:59:59
+   ```bash
+   docker-compose up -d
+   ```
+
+   Миграции выполняются при старте API.
+
+3. При первом использовании Telethon — авторизация через API:
+
+   ```bash
+   curl -X POST http://localhost:8000/api/telegram/auth -H "Content-Type: application/json" -d "{\"phone\": \"+79991234567\"}"
+   curl -X POST http://localhost:8000/api/telegram/auth -H "Content-Type: application/json" -d "{\"phone\": \"+79991234567\", \"code\": \"12345\"}"
+   ```
+
+
+Документация API: **http://localhost:8000/docs**
+
+---
+
+Переменные окружения — см. `env.example`.
+
+---
+
+## API
+
+Base URL: `http://localhost:8000`. Документация: **/docs**.
+
+| Метод | URL | Описание |
+|-------|-----|----------|
+| GET | `/`, `/health` | Приветствие, проверка |
+| GET/POST/PUT/DELETE | `/api/sources/` | CRUD источников |
+| GET/POST/DELETE | `/api/keywords/` | CRUD ключевых слов |
+| GET/POST/PUT/DELETE | `/api/posts/`, `/api/news/` | Посты и новости |
+| POST | `/api/generate` | Сгенерировать пост (`news_id` или `text`) |
+| POST | `/api/publish` | Опубликовать в канал (`post_id` или `text`) |
+| POST | `/api/telegram/auth` | Авторизация Telethon |
+
+### Примеры запросов
+
+**Добавить источник (RSS):**
+
+```bash
+curl -X POST http://localhost:8000/api/sources/ \
+  -H "Content-Type: application/json" \
+  -d '{"type": "site", "name": "Habr", "url": "https://habr.com/ru/rss/all/", "enabled": true}'
+```
+
+**Добавить ключевое слово:**
+
+```bash
+curl -X POST http://localhost:8000/api/keywords/ \
+  -H "Content-Type: application/json" \
+  -d '{"word": "Python"}'
+```
+
+**Сгенерировать пост по тексту:**
+
+```bash
+curl -X POST http://localhost:8000/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "В Python 3.12 вышли улучшения производительности интерпретатора."}'
+```
+
+**Опубликовать пост по ID:**
+
+```bash
+curl -X POST http://localhost:8000/api/publish \
+  -H "Content-Type: application/json" \
+  -d '{"post_id": 1}'
+```
+
+---
+
+## Celery
+
+- **Парсинг** (`parse_all_sources`) — по расписанию, обход источников, сохранение новостей.
+- **Обработка** (`process_news_items`) — фильтрация → генерация → создание постов.
+- **Публикация** — отдельные таски отправляют посты в канал.
+
+Расписание в `app/tasks.py` (Celery Beat).
+
+---

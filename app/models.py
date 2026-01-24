@@ -29,11 +29,18 @@ class PostStatus(str, Enum):
     FAILED = "failed"
 
 
+def _enum_values(e):
+    return [x.value for x in e]
+
+
 class Source(Base):
     __tablename__ = "sources"
 
     id = Column(Integer, primary_key=True, index=True)
-    type = Column(SQLEnum(SourceType), nullable=False)
+    type = Column(
+        SQLEnum(SourceType, values_callable=_enum_values),
+        nullable=False,
+    )
     name = Column(String(255), nullable=False)
     url = Column(String(500), nullable=False)
     enabled = Column(Boolean, default=True)
@@ -80,7 +87,10 @@ class Post(Base):
     news_id = Column(String(36), ForeignKey("news_items.id"), nullable=False)
     generated_text = Column(Text, nullable=False)
     published_at = Column(Timestamp, nullable=True)
-    status = Column(SQLEnum(PostStatus), default=PostStatus.NEW)
+    status = Column(
+        SQLEnum(PostStatus, values_callable=_enum_values),
+        default=PostStatus.NEW,
+    )
     created_at = Column(Timestamp, default=utcnow)
 
     news_item = relationship("NewsItem", back_populates="posts")
