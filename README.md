@@ -69,6 +69,28 @@ aibot/
 
 ---
 
+## GigaChat
+
+Генерация постов идёт через **Sber GigaChat**. Нужен один из вариантов авторизации.
+
+**Где взять ключи:** [developers.sber.ru](https://developers.sber.ru) → войти по Сбер ID → **Создать проект** → **GigaChat API** → в настройках проекта **«Получить ключ»**. Ключ показывается один раз — сохраните его.
+
+**Вариант 1 — API-ключ (проще):** скопируйте «Authorization Key» из личного кабинета в `.env`:
+
+```
+GIGACHAT_API_KEY=ваш_base64_ключ
+```
+
+**Вариант 2 — OAuth:** укажите в `.env`:
+
+```
+GIGACHAT_CLIENT_ID=ваш_client_id
+GIGACHAT_CLIENT_SECRET=ваш_client_secret
+```
+
+Полный список переменных — в `env.example`. На бесплатном тарифе Freemium доступно 1 000 000 токенов в год.
+
+---
 
 ## API
 
