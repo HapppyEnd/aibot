@@ -13,11 +13,7 @@ class TelegramBot:
     """
 
     def __init__(self):
-        """
-        Инициализация бота
 
-        Требует предварительной авторизации через authorize_telegram().
-        """
         if not settings.TELEGRAM_API_ID or not settings.TELEGRAM_API_HASH:
             raise ValueError(
                 "Не указаны TELEGRAM_API_ID и TELEGRAM_API_HASH. "
@@ -35,7 +31,7 @@ class TelegramBot:
 
     async def connect(self):
         """
-        Подключиться к Telegram
+        Подключиться к Telegram.
 
         Требует предварительной авторизации через authorize_telegram().
         """
@@ -44,7 +40,7 @@ class TelegramBot:
             logger.info("Подключено к Telegram")
 
     async def disconnect(self):
-        """Отключиться от Telegram"""
+        """Отключиться от Telegram."""
         if self.client.is_connected():
             await self.client.disconnect()
             logger.info("Отключено от Telegram")

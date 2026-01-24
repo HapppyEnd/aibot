@@ -1,6 +1,3 @@
-"""
-Модели данных для базы данных
-"""
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -14,7 +11,6 @@ from app.database import Base
 
 
 def utcnow():
-    """Возвращает текущее время в UTC"""
     return datetime.now(timezone.utc)
 
 
@@ -34,7 +30,6 @@ class PostStatus(str, Enum):
 
 
 class Source(Base):
-    """Модель источника новостей"""
     __tablename__ = "sources"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -48,7 +43,6 @@ class Source(Base):
 
 
 class Keyword(Base):
-    """Модель ключевого слова для фильтрации"""
     __tablename__ = "keywords"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -57,7 +51,6 @@ class Keyword(Base):
 
 
 class NewsItem(Base):
-    """Модель новости"""
     __tablename__ = "news_items"
 
     id = Column(
@@ -81,7 +74,6 @@ class NewsItem(Base):
 
 
 class Post(Base):
-    """Модель поста"""
     __tablename__ = "posts"
 
     id = Column(Integer, primary_key=True, index=True)

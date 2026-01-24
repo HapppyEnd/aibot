@@ -1,9 +1,5 @@
-"""
-Pydantic схемы для валидации данных API
-"""
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -21,13 +17,6 @@ class PostStatus(str, Enum):
 
 
 class SourceBase(BaseModel):
-    """
-    Базовая схема источника новостей
-
-    Поле url имеет разное значение в зависимости от type:
-    - type='site': URL сайта (например, "https://habr.com")
-    - type='tg': username Telegram-канала
-    """
     type: SourceType
     name: str
     url: str  # URL для сайтов, username для Telegram-каналов
@@ -39,9 +28,9 @@ class SourceCreate(SourceBase):
 
 
 class SourceUpdate(BaseModel):
-    name: Optional[str] = None
-    url: Optional[str] = None
-    enabled: Optional[bool] = None
+    name: str | None = None
+    url: str | None = None
+    enabled: bool | None = None
 
 
 class SourceResponse(SourceBase):
@@ -71,28 +60,32 @@ class KeywordResponse(KeywordBase):
 class NewsItemResponse(BaseModel):
     id: str
     title: str
-    url: Optional[str] = None
+    url: str | None = None
     summary: str
     source: str
     published_at: datetime
-    raw_text: Optional[str] = None
+    raw_text: str | None = None
 
     class Config:
         from_attributes = True
 
 
 class PostCreate(BaseModel):
-    """Схема для создания нового поста"""
     news_id: str
     generated_text: str
     status: PostStatus = PostStatus.NEW
+
+
+class PostUpdate(BaseModel):
+    generated_text: str | None = None
+    status: PostStatus | None = None
 
 
 class PostResponse(BaseModel):
     id: int
     news_id: str
     generated_text: str
-    published_at: Optional[datetime] = None
+    published_at: datetime | None = None
     status: PostStatus
     created_at: datetime
 
@@ -101,46 +94,37 @@ class PostResponse(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    news_id: Optional[str] = None
-    text: Optional[str] = None
-    custom_prompt: Optional[str] = None
+    news_id: str | None = None
+    text: str | None = None
+    custom_prompt: str | None = None
 
 
 class GenerateResponse(BaseModel):
     generated_text: str
-    news_id: Optional[str] = None
+    news_id: str | None = None
 
 
 class PublishRequest(BaseModel):
-    """
-    Запрос на публикацию поста
-
-    Можно указать либо post_id (для публикации существующего поста),
-    либо text (для публикации произвольного текста)
-    """
-    post_id: Optional[int] = None
-    text: Optional[str] = None
-    channel_username: Optional[str] = None
+    post_id: int | None = None
+    text: str | None = None
+    channel_username: str | None = None
 
 
 class PublishResponse(BaseModel):
-    """Ответ на запрос публикации"""
     success: bool
     message: str
-    telegram_message_id: Optional[int] = None
-    post_id: Optional[int] = None
+    telegram_message_id: int | None = None
+    post_id: int | None = None
 
 
 class TelegramAuthRequest(BaseModel):
-    """Запрос на авторизацию в Telegram"""
     phone: str
-    code: Optional[str] = None
+    code: str | None = None
 
 
 class TelegramAuthResponse(BaseModel):
-    """Ответ на запрос авторизации в Telegram"""
     success: bool
     message: str
-    phone: Optional[str] = None
-    username: Optional[str] = None
-    next_step: Optional[str] = None
+    phone: str | None = None
+    username: str | None = None
+    next_step: str | None = None

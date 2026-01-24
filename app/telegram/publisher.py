@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,9 +18,9 @@ class TelegramPublisher:
 
     def __init__(
         self,
-        api_id: Optional[int] = None,
-        api_hash: Optional[str] = None,
-        channel_username: Optional[str] = None
+        api_id: int | None = None,
+        api_hash: str | None = None,
+        channel_username: str | None = None
     ):
 
         self.api_id = api_id or settings.TELEGRAM_API_ID
@@ -94,9 +93,9 @@ class TelegramPublisher:
 
     async def _mark_post_as_failed(
         self,
-        post: Optional[Post],
-        post_id: Optional[int],
-        db: Optional[AsyncSession]
+        post: Post | None,
+        post_id: int | None,
+        db: AsyncSession | None
     ) -> None:
         """Обновить статус поста на FAILED."""
         if not post_id or not db:
@@ -122,10 +121,10 @@ class TelegramPublisher:
     async def publish_post(
         self,
         text: str,
-        post_id: Optional[int] = None,
-        db: Optional[AsyncSession] = None,
-        channel_username: Optional[str] = None
-    ) -> Optional[int]:
+        post_id: int | None = None,
+        db: AsyncSession | None = None,
+        channel_username: str | None = None
+    ) -> int | None:
         """Опубликовать пост в канал."""
         if not text or not text.strip():
             error_msg = "Текст поста не может быть пустым"
@@ -201,7 +200,7 @@ class TelegramPublisher:
                     await db.rollback()
 
             logger.info(
-                f"✅ Пост успешно опубликован! "
+                f"Пост успешно опубликован! "
                 f"Telegram message ID: {telegram_message_id}"
                 + (f", Post ID: {post_id}" if post_id else "")
             )
@@ -209,7 +208,7 @@ class TelegramPublisher:
 
         except FloodWaitError as e:
             error_msg = (
-                f"❌ Telegram FloodWait: нужно подождать {e.seconds} секунд "
+                f"Telegram FloodWait: нужно подождать {e.seconds} секунд "
                 f"перед следующей публикацией"
             )
             logger.error(error_msg)
@@ -218,7 +217,7 @@ class TelegramPublisher:
             return None
         except (ChannelInvalidError, UsernameInvalidError) as e:
             error_msg = (
-                f"❌ Ошибка: канал '{channel}' не найден "
+                f"Ошибка: канал '{channel}' не найден "
                 f"или недоступен: {e}"
             )
             logger.error(error_msg)
@@ -226,7 +225,7 @@ class TelegramPublisher:
             await self._mark_post_as_failed(post, post_id, db)
             return None
         except Exception as e:
-            error_msg = f"❌ Ошибка при публикации поста: {e}"
+            error_msg = f"Ошибка при публикации поста: {e}"
             logger.error(error_msg, exc_info=True)
 
             await self._mark_post_as_failed(post, post_id, db)

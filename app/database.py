@@ -1,6 +1,3 @@
-"""
-Настройка подключения к базе данных (асинхронная версия)
-"""
 from sqlalchemy.ext.asyncio import (AsyncSession, async_sessionmaker,
                                     create_async_engine)
 from sqlalchemy.orm import declarative_base
@@ -28,20 +25,13 @@ Base = declarative_base()
 
 
 async def init_db():
-    """Инициализация базы данных - создание таблиц"""
     async with engine.begin() as conn:
         from app import models  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
 
 async def get_db() -> AsyncSession:
-    """
-    Получить async сессию БД (для dependency injection в FastAPI)
 
-    Usage:
-        async def my_endpoint(db: AsyncSession = Depends(get_db)):
-            result = await db.execute(select(MyModel))
-    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -58,17 +48,7 @@ async def save_and_refresh(
     obj,
     add: bool = False
 ):
-    """
-    Сохраняет объект в БД и обновляет его состояние.
-
-    Args:
-        db: Async сессия БД
-        obj: Объект для сохранения
-        add: Если True, добавляет объект в сессию перед flush
-
-    Returns:
-        Обновленный объект
-    """
+    """Сохраняет объект в БД и обновляет его состояние."""
     if add:
         db.add(obj)
     await db.flush()
@@ -77,12 +57,6 @@ async def save_and_refresh(
 
 
 async def delete_and_flush(db: AsyncSession, obj):
-    """
-    Удаляет объект из БД.
-
-    Args:
-        db: Async сессия БД
-        obj: Объект для удаления
-    """
+    """Удаляет объект из БД."""
     await db.delete(obj)
     await db.flush()

@@ -1,9 +1,8 @@
 import asyncio
 import logging
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.generator import AIProviderError, PostGenerator
@@ -11,9 +10,10 @@ from app.api.helpers import (bad_request_error, create_publish_response,
                              not_found_error, server_error)
 from app.api.schemas import (GenerateRequest, GenerateResponse, KeywordCreate,
                              KeywordResponse, NewsItemResponse, PostCreate,
-                             PostResponse, PublishRequest, PublishResponse,
-                             SourceCreate, SourceResponse, SourceUpdate,
-                             TelegramAuthRequest, TelegramAuthResponse)
+                             PostResponse, PostUpdate, PublishRequest,
+                             PublishResponse, SourceCreate, SourceResponse,
+                             SourceUpdate, TelegramAuthRequest,
+                             TelegramAuthResponse)
 from app.config import settings
 from app.database import delete_and_flush, get_db, save_and_refresh
 from app.models import Keyword, NewsItem, Post, PostStatus, Source
@@ -24,6 +24,15 @@ from app.utils import matches_keywords, should_generate_post
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+PAGINATION_SKIP = Query(0, ge=0, description="Количество записей для пропуска")
+PAGINATION_LIMIT = Query(
+    100, ge=1, le=1000, description="Максимальное количество записей")
+
+MSG_PUBLISH_POST_OK = "Пост #{} успешно опубликован"
+MSG_PUBLISH_POST_FAIL = "Не удалось опубликовать пост #{}"
+MSG_PUBLISH_TEXT_OK = "Текст успешно опубликован"
+MSG_PUBLISH_TEXT_FAIL = "Не удалось опубликовать текст"
+
 
 async def create_or_update_post(
     db: AsyncSession,
@@ -31,18 +40,8 @@ async def create_or_update_post(
     generated_text: str,
     status: PostStatus = PostStatus.GENERATED
 ) -> Post:
-    """
-    Создает новый пост или обновляет существующий для новости.
+    """Создает новый пост или обновляет существующий."""
 
-    Args:
-        db: Async сессия БД
-        news_id: ID новости
-        generated_text: Сгенерированный текст поста
-        status: Статус поста
-
-    Returns:
-        Созданный или обновленный пост
-    """
     result = await db.execute(
         select(Post).filter(
             Post.news_id == news_id,
@@ -70,23 +69,19 @@ async def create_or_update_post(
 
 @router.get(
     "/sources/",
-    response_model=List[SourceResponse],
+    response_model=list[SourceResponse],
     summary="Получить список всех источников"
 )
 async def get_sources(
-    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Максимальное количество записей"
-    ),
-    enabled: Optional[bool] = Query(
+    skip: int = PAGINATION_SKIP,
+    limit: int = PAGINATION_LIMIT,
+    enabled: bool | None = Query(
         None, description="Фильтр по статусу активности"
     ),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Получить список всех источников новостей (сайты и Telegram-каналы).
-    Поддерживает пагинацию и фильтрацию по статусу активности.
-    """
+    """Получить список всех источников новостей."""
+
     query = select(Source)
 
     if enabled is not None:
@@ -105,7 +100,8 @@ async def get_sources(
     summary="Получить источник по ID"
 )
 async def get_source(source_id: int, db: AsyncSession = Depends(get_db)):
-    """Получить информацию об источнике по его ID"""
+    """Получить информацию об источнике по ID."""
+
     result = await db.execute(
         select(Source).filter(Source.id == source_id)
     )
@@ -125,19 +121,18 @@ async def create_source(
     source: SourceCreate, db: AsyncSession = Depends(get_db)
 ):
     """
-    Создать новый источник новостей (сайт или Telegram-канал).
+    Создать новый источник новостей.
 
     - `type`: Тип источника
         - `site` - для веб-сайтов
         - `tg` - для Telegram-каналов
-    - `name`: Название источника (например, "Habr", "Мой канал")
+    - `name`: Название источника
     - `url`:
-        - Для сайтов (`type=site`): URL сайта (например, "https://habr.com")
+        - Для сайтов (`type=site`): URL сайта
         - Для Telegram (`type=tg`): username канала с @ или без
-          (например, "@channel_name" или "channel_name")
     - `enabled`: Активен ли источник (по умолчанию True)
     """
-    db_source = Source(**source.dict())
+    db_source = Source(**source.model_dump())
     await save_and_refresh(db, db_source, add=True)
     return db_source
 
@@ -162,7 +157,7 @@ async def update_source(
     if not db_source:
         raise not_found_error("Источник не найден")
 
-    update_data = source_update.dict(exclude_unset=True)
+    update_data = source_update.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_source, field, value)
 
@@ -178,7 +173,7 @@ async def update_source(
 async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
     """
     Удалить источник новостей.
-    Внимание: это также удалит все связанные новости и логи ошибок.
+    Также удалит все связанные новости и посты.
     """
     result = await db.execute(
         select(Source).filter(Source.id == source_id)
@@ -187,25 +182,25 @@ async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
     if not db_source:
         raise not_found_error("Источник не найден")
 
+    subq = select(NewsItem.id).where(NewsItem.source_id == source_id)
+    await db.execute(delete(Post).where(Post.news_id.in_(subq)))
+    await db.execute(delete(NewsItem).where(NewsItem.source_id == source_id))
     await delete_and_flush(db, db_source)
     return None
 
 
 @router.get(
     "/keywords/",
-    response_model=List[KeywordResponse],
+    response_model=list[KeywordResponse],
     summary="Получить список всех ключевых слов"
 )
 async def get_keywords(
-    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Максимальное количество записей"
-    ),
+    skip: int = PAGINATION_SKIP,
+    limit: int = PAGINATION_LIMIT,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Получить список всех ключевых слов для фильтрации новостей.
-    """
+    """Получить список всех ключевых слов для фильтрации новостей."""
+
     query = (
         select(Keyword)
         .order_by(desc(Keyword.created_at))
@@ -223,7 +218,8 @@ async def get_keywords(
     summary="Получить ключевое слово по ID"
 )
 async def get_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
-    """Получить ключевое слово по ID"""
+    """Получить ключевое слово по ID."""
+
     result = await db.execute(
         select(Keyword).filter(Keyword.id == keyword_id)
     )
@@ -242,11 +238,8 @@ async def get_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
 async def create_keyword(
     keyword: KeywordCreate, db: AsyncSession = Depends(get_db)
 ):
-    """
-    Добавить новое ключевое слово для фильтрации новостей.
+    """Добавить новое ключевое слово для фильтрации новостей."""
 
-    - `word`: Ключевое слово (должно быть уникальным)
-    """
     result = await db.execute(
         select(Keyword).filter(Keyword.word == keyword.word)
     )
@@ -254,7 +247,7 @@ async def create_keyword(
     if existing:
         raise bad_request_error("Ключевое слово уже существует")
 
-    db_keyword = Keyword(**keyword.dict())
+    db_keyword = Keyword(**keyword.model_dump())
     await save_and_refresh(db, db_keyword, add=True)
     return db_keyword
 
@@ -265,49 +258,41 @@ async def create_keyword(
     summary="Удалить ключевое слово"
 )
 async def delete_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
-    """Удалить ключевое слово из списка фильтров"""
+    """Удалить ключевое слово."""
+
     result = await db.execute(
         select(Keyword).filter(Keyword.id == keyword_id)
     )
     db_keyword = result.scalar_one_or_none()
     if not db_keyword:
         raise not_found_error("Ключевое слово не найдено")
-
     await delete_and_flush(db, db_keyword)
     return None
 
 
 @router.get(
     "/posts/",
-    response_model=List[PostResponse],
+    response_model=list[PostResponse],
     summary="Получить историю постов"
 )
 async def get_posts(
-    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Максимальное количество записей"
-    ),
-    status: Optional[str] = Query(
+    skip: int = PAGINATION_SKIP,
+    limit: int = PAGINATION_LIMIT,
+    status: str | None = Query(
         None,
         description="Фильтр по статусу (new, generated, published, failed)"
     ),
-    news_id: Optional[str] = Query(None, description="Фильтр по ID новости"),
+    news_id: str | None = Query(None, description="Фильтр по ID новости"),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Получить историю всех постов.
-    Поддерживает пагинацию и фильтрацию по статусу и ID новости.
-    """
-    query = select(Post)
+    """Получить историю всех постов."""
 
+    query = select(Post)
     if status:
         query = query.filter(Post.status == status)
-
     if news_id:
         query = query.filter(Post.news_id == news_id)
-
     query = query.order_by(desc(Post.created_at)).offset(skip).limit(limit)
-
     result = await db.execute(query)
     posts = result.scalars().all()
     return posts
@@ -323,13 +308,8 @@ async def create_post(
     post: PostCreate,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Создать новый пост вручную.
+    """Создать новый пост вручную."""
 
-    - `news_id`: ID новости из базы данных (обязательно)
-    - `generated_text`: Текст поста для публикации
-    - `status`: Статус поста (по умолчанию "new")
-    """
     result = await db.execute(
         select(NewsItem).filter(NewsItem.id == post.news_id)
     )
@@ -352,7 +332,8 @@ async def create_post(
     summary="Получить пост по ID"
 )
 async def get_post(post_id: int, db: AsyncSession = Depends(get_db)):
-    """Получить пост по ID"""
+    """Получить пост по ID."""
+
     result = await db.execute(
         select(Post).filter(Post.id == post_id)
     )
@@ -362,35 +343,77 @@ async def get_post(post_id: int, db: AsyncSession = Depends(get_db)):
     return post
 
 
+@router.put(
+    "/posts/{post_id}",
+    response_model=PostResponse,
+    summary="Обновить пост"
+)
+async def update_post(
+    post_id: int,
+    post_update: PostUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновить текст или статус поста."""
+    result = await db.execute(
+        select(Post).filter(Post.id == post_id)
+    )
+    post = result.scalar_one_or_none()
+    if not post:
+        raise not_found_error("Пост не найден")
+
+    update_data = post_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(post, field, value)
+
+    await save_and_refresh(db, post)
+    return post
+
+
+@router.delete(
+    "/posts/{post_id}",
+    status_code=204,
+    summary="Удалить пост"
+)
+async def delete_post(post_id: int, db: AsyncSession = Depends(get_db)):
+    """Удалить пост по ID."""
+    result = await db.execute(
+        select(Post).filter(Post.id == post_id)
+    )
+    post = result.scalar_one_or_none()
+    if not post:
+        raise not_found_error("Пост не найден")
+    await delete_and_flush(db, post)
+    return None
+
+
 @router.get(
     "/news/",
-    response_model=List[NewsItemResponse],
+    response_model=list[NewsItemResponse],
     summary="Получить список новостей"
 )
 async def get_news(
-    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Максимальное количество записей"
-    ),
-    source: Optional[str] = Query(
+    skip: int = PAGINATION_SKIP,
+    limit: int = PAGINATION_LIMIT,
+    source: str | None = Query(
         None,
         description="Фильтр по названию источника"
     ),
-    source_id: Optional[int] = Query(
+    source_id: int | None = Query(
         None,
         description="Фильтр по ID источника"
     ),
-    keyword: Optional[str] = Query(
+    keyword: str | None = Query(
         None,
-        description=("Фильтр по ключевому слову ")
+        description="Фильтр по ключевому слову"
+    ),
+    ready_for_generation: bool = Query(
+        False,
+        description="Только новости, готовые к генерации поста"
     ),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Получить список всех новостей.
+    """Получить список новостей."""
 
-    Поддерживает фильтрацию по источнику и ключевым словам.
-    """
     query = select(NewsItem)
 
     if source:
@@ -401,10 +424,22 @@ async def get_news(
     query = (
         query.order_by(desc(NewsItem.published_at))
         .offset(skip)
-        .limit(limit * 3 if keyword else limit)
+        .limit(limit)
     )
     result = await db.execute(query)
     all_news = result.scalars().all()
+
+    if ready_for_generation:
+        filtered_news = []
+        for news_item in all_news:
+            should_generate, _ = await should_generate_post(
+                news_item, db, check_keywords=False
+            )
+            if should_generate:
+                filtered_news.append(news_item)
+                if len(filtered_news) >= limit:
+                    break
+        return filtered_news
 
     if keyword:
         filtered_news = []
@@ -419,50 +454,12 @@ async def get_news(
 
 
 @router.get(
-    "/news/filtered",
-    response_model=List[NewsItemResponse],
-    summary="Получить отфильтрованные новости для генерации"
-)
-async def get_filtered_news(
-    skip: int = Query(0, ge=0, description="Количество записей для пропуска"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Максимальное количество записей"
-    ),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Получить список новостей, которые прошли фильтрацию и готовы
-    к генерации постов.
-    """
-    query = (
-        select(NewsItem)
-        .order_by(desc(NewsItem.published_at))
-        .offset(skip)
-        .limit(limit * 3)
-    )
-    result = await db.execute(query)
-    all_news = result.scalars().all()
-    filtered_news = []
-    for news_item in all_news:
-        should_generate, _ = await should_generate_post(
-            news_item, db,
-            check_keywords=False
-        )
-        if should_generate:
-            filtered_news.append(news_item)
-            if len(filtered_news) >= limit:
-                break
-
-    return filtered_news
-
-
-@router.get(
     "/news/{news_id}",
     response_model=NewsItemResponse,
     summary="Получить новость по ID"
 )
 async def get_news_item(news_id: str, db: AsyncSession = Depends(get_db)):
-    """Получить новость по ID"""
+    """Получить новость по ID."""
     result = await db.execute(
         select(NewsItem).filter(NewsItem.id == news_id)
     )
@@ -470,6 +467,25 @@ async def get_news_item(news_id: str, db: AsyncSession = Depends(get_db)):
     if not news_item:
         raise not_found_error("Новость не найдена")
     return news_item
+
+
+@router.delete(
+    "/news/{news_id}",
+    status_code=204,
+    summary="Удалить новость"
+)
+async def delete_news_item(news_id: str, db: AsyncSession = Depends(get_db)):
+    """Удалить новость по ID. Также удалит все связанные посты."""
+    result = await db.execute(
+        select(NewsItem).filter(NewsItem.id == news_id)
+    )
+    news_item = result.scalar_one_or_none()
+    if not news_item:
+        raise not_found_error("Новость не найдена")
+
+    await db.execute(delete(Post).where(Post.news_id == news_id))
+    await delete_and_flush(db, news_item)
+    return None
 
 
 @router.post(
@@ -481,15 +497,7 @@ async def generate_post(
     request: GenerateRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Сгенерировать пост на основе новости или произвольного текста.
-    Можно указать news_id для использования существующей новости,
-    или передать text напрямую.
-
-    - `news_id`: ID новости
-    - `text`: Произвольный текст для генерации
-    - `custom_prompt`: Промпт для генерации
-    """
+    """Сгенерировать пост на основе новости или произвольного текста."""
     generator = PostGenerator()
 
     if request.news_id:
@@ -510,7 +518,7 @@ async def generate_post(
     elif request.text:
         news_text = request.text
     else:
-        raise bad_request_error("Необходимо указать либо news_id, либо text")
+        raise bad_request_error("Необходимо указать news_id или text")
 
     try:
         generated_text = await asyncio.to_thread(
@@ -547,15 +555,10 @@ async def publish_post(
     request: PublishRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Публикация поста в Telegram-канал.
+    """Публикация поста в Telegram-канал."""
 
-    - `post_id`: ID поста из БД
-    - `text`: Произвольный текст для публикации
-    - `channel_username`: Username канала
-    """
     if not request.post_id and not request.text:
-        raise bad_request_error("Необходимо указать либо post_id, либо text")
+        raise bad_request_error("Необходимо указать post_id или text")
 
     if not settings.TELEGRAM_API_ID or not settings.TELEGRAM_API_HASH:
         raise server_error("TELEGRAM_API_ID и TELEGRAM_API_HASH не настроены")
@@ -580,46 +583,34 @@ async def publish_post(
             post = result.scalar_one_or_none()
             if not post:
                 raise not_found_error(f"Пост с ID {request.post_id} не найден")
-
             if post.status == PostStatus.PUBLISHED and post.published_at:
                 return create_publish_response(
                     success=False,
                     message=f"Пост #{request.post_id} уже был опубликован",
                     post_id=request.post_id
                 )
-
             text_to_publish = post.generated_text
-            telegram_message_id = await publisher.publish_post(
-                text=text_to_publish,
-                post_id=request.post_id,
-                db=db
-            )
-            success = telegram_message_id is not None
-            return create_publish_response(
-                success=success,
-                message=(
-                    f"Пост #{request.post_id} успешно опубликован"
-                    if success
-                    else f"Не удалось опубликовать пост #{request.post_id}"
-                ),
-                telegram_message_id=telegram_message_id,
-                post_id=request.post_id
-            )
+            post_id = request.post_id
+            msg_ok = MSG_PUBLISH_POST_OK.format(post_id)
+            msg_fail = MSG_PUBLISH_POST_FAIL.format(post_id)
+        else:
+            text_to_publish = request.text
+            post_id = None
+            msg_ok = MSG_PUBLISH_TEXT_OK
+            msg_fail = MSG_PUBLISH_TEXT_FAIL
 
-        elif request.text:
-            telegram_message_id = await publisher.publish_post(
-                text=request.text
-            )
-            success = telegram_message_id is not None
-            return create_publish_response(
-                success=success,
-                message=(
-                    "Текст успешно опубликован"
-                    if success
-                    else "Не удалось опубликовать текст"
-                ),
-                telegram_message_id=telegram_message_id
-            )
+        telegram_message_id = await publisher.publish_post(
+            text=text_to_publish,
+            post_id=post_id,
+            db=db if post_id else None
+        )
+        success = telegram_message_id is not None
+        return create_publish_response(
+            success=success,
+            message=msg_ok if success else msg_fail,
+            telegram_message_id=telegram_message_id,
+            post_id=post_id
+        )
 
     except HTTPException:
         raise
@@ -639,28 +630,21 @@ async def telegram_auth(request: TelegramAuthRequest):
     """
     Авторизация в Telegram через API.
 
-    Процесс авторизации состоит из двух шагов:
-
-    1. **Первый запрос** - отправка номера телефона:
+    1. `Первый запрос` - отправка номера телефона:
        ```json
        {
          "phone": "+79991234567"
        }
        ```
-       В ответ придет `next_step: "code"` - нужно ввести код из Telegram.
+       В ответ придет `next_step: "code"` - код из Telegram.
 
-    2. **Второй запрос** - отправка кода:
+    2. `Второй запрос` - отправка кода:
        ```json
        {
          "phone": "+79991234567",
          "code": "12345"
        }
        ```
-
-    После успешной авторизации сессия сохраняется в файл и больше не требуется.
-
-    - `phone`: Номер телефона в формате +7XXXXXXXXXX
-    - `code`: Код подтверждения из Telegram (опционально)
     """
     if not settings.TELEGRAM_API_ID or not settings.TELEGRAM_API_HASH:
         raise server_error("TELEGRAM_API_ID и TELEGRAM_API_HASH не настроены")

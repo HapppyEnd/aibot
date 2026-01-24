@@ -1,8 +1,10 @@
 """
 Конфигурация приложения
 """
-from typing import Optional
 
+from urllib.parse import quote_plus
+
+from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
 
@@ -10,24 +12,37 @@ class Settings(BaseSettings):
     """Настройки приложения (загружаются из .env файла)"""
 
     # Database
-    DATABASE_URL: str
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_HOST: str = "postgres"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "aibot"
+
+    @computed_field
+    @property
+    def DATABASE_URL(self) -> str:
+        pw = quote_plus(self.POSTGRES_PASSWORD)
+        return (
+            f"postgresql+asyncpg://{self.POSTGRES_USER}:{pw}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
 
     # Celery
     CELERY_BROKER_URL: str
     CELERY_RESULT_BACKEND: str
 
     # Telegram
-    TELEGRAM_API_ID: Optional[int] = None
-    TELEGRAM_API_HASH: Optional[str] = None
-    TELEGRAM_CHANNEL_USERNAME: Optional[str] = None
-    TELEGRAM_SESSION_NAME: Optional[str] = 'telegram_session'
+    TELEGRAM_API_ID: int | None = None
+    TELEGRAM_API_HASH: str | None = None
+    TELEGRAM_CHANNEL_USERNAME: str | None = None
+    TELEGRAM_SESSION_NAME: str | None = 'telegram_session'
 
     # SberGigaChat (доступен в России!)))
     # отдельные client_id и client_secret
-    GIGACHAT_CLIENT_ID: Optional[str] = None
-    GIGACHAT_CLIENT_SECRET: Optional[str] = None
+    GIGACHAT_CLIENT_ID: str | None = None
+    GIGACHAT_CLIENT_SECRET: str | None = None
     # готовый base64 ключ
-    GIGACHAT_API_KEY: Optional[str] = None
+    GIGACHAT_API_KEY: str | None = None
 
     # App
     DEBUG: bool = False

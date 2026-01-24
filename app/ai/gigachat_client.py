@@ -4,7 +4,6 @@
 import base64
 import logging
 import time
-from typing import Optional
 
 from gigachat import GigaChat
 from gigachat.exceptions import ResponseError
@@ -24,9 +23,9 @@ class GigaChatClient:
 
     def __init__(
         self,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        api_key: Optional[str] = None
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        api_key: str | None = None
     ):
         """
         Инициализация клиента GigaChat

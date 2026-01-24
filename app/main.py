@@ -58,12 +58,7 @@ def setup_logging():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Управление жизненным циклом приложения
 
-    Args:
-        app: Экземпляр FastAPI приложения
-    """
     setup_logging()
     await init_db()
 

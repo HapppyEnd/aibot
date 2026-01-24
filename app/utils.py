@@ -139,21 +139,7 @@ async def should_generate_post(
     check_keywords: bool = DEFAULT_FILTER_CHECK_KEYWORDS,
     check_duplicates: bool = DEFAULT_FILTER_CHECK_DUPLICATES
 ) -> tuple[bool, str]:
-    """
-    Проверка, нужно ли генерировать пост для новости
-
-    Args:
-        news_item: Новость для проверки
-        db: Сессия БД
-        required_language: Требуемый язык
-        required_source_ids: Список разрешенных source_id
-        exclude_source_ids: Список исключенных source_id
-        check_keywords: Проверять ли ключевые слова
-        check_duplicates: Проверять ли дубли
-
-    Returns:
-        Кортеж (should_generate, reason)
-    """
+    """Проверка, нужно ли генерировать пост для новости."""
     if required_language:
         news_text = f"{news_item.title} {news_item.summary}"
         detected_lang = detect_language(news_text)
@@ -163,36 +149,22 @@ async def should_generate_post(
                 f"Язык новости ({detected_lang}) не соответствует "
                 f"требуемому ({required_language})"
             )
-
     if required_source_ids:
         if news_item.source_id not in required_source_ids:
             return (
                 False,
                 f"Источник {news_item.source_id} не в списке разрешенных"
             )
-
     if exclude_source_ids:
         if news_item.source_id in exclude_source_ids:
-            return (
-                False,
-                f"Источник {news_item.source_id} в списке исключенных"
-            )
-
+            return (False, "Источник в списке исключенных")
     if check_keywords:
         result = await db.execute(select(Keyword))
         keywords = [kw.word for kw in result.scalars().all()]
         if keywords:
             if not await matches_keywords(news_item, keywords, db):
-                return (
-                    False,
-                    "Новость не содержит ключевых слов"
-                )
-
+                return (False, "Новость не содержит ключевых слов")
     if check_duplicates:
         if await is_duplicate(news_item, db):
-            return (
-                False,
-                "Найдена похожая новость (дубль)"
-            )
-
+            return (False, "Найдена похожая новость (дубль)")
     return (True, "Новость прошла все проверки")

@@ -1,5 +1,4 @@
 import logging
-from typing import Dict
 
 from telethon import TelegramClient
 
@@ -7,7 +6,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_auth_sessions: Dict[str, str] = {}
+_auth_sessions: dict[str, str] = {}
 
 
 async def authorize_telegram(

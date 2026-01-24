@@ -113,7 +113,7 @@ class RSSParser(SiteParser):
                         'published_at': published_at
                     })
                 except Exception as e:
-                    logger.warning(f"Ошибка обработки RSS записи: {e}")
+                    logger.warning(f"Ошибка обработки: {e}")
                     continue
 
             logger.info(

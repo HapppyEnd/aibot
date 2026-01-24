@@ -2,7 +2,6 @@
 Генератор постов с использованием AI (SberGigaChat)
 """
 import logging
-from typing import Optional
 
 from app.ai.gigachat_client import GigaChatClient, GigaChatError
 from app.ai.prompts import DEFAULT_PROMPT_TEMPLATE
@@ -18,7 +17,7 @@ class AIProviderError(Exception):
 class PostGenerator:
     """Генератор постов на основе новостей"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """
         Инициализация генератора
 
@@ -32,8 +31,8 @@ class PostGenerator:
     def generate_post(
         self,
         news_text: str,
-        custom_prompt: Optional[str] = None,
-        model: Optional[str] = None,
+        custom_prompt: str | None = None,
+        model: str | None = None,
         max_tokens: int = 500
     ) -> str:
         """

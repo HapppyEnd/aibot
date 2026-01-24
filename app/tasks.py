@@ -1,6 +1,3 @@
-"""
-Celery задачи для фоновой обработки
-"""
 import asyncio
 import hashlib
 import logging
@@ -90,9 +87,8 @@ def run_async(coro):
 
 
 async def _save_news_items(news_items: list[dict], source_id: int):
-    """
-    Сохраняет новости в БД.
-    """
+    """Сохраняет новости в БД."""
+
     async with AsyncSessionLocal() as db:
         saved_count = 0
         for item in news_items:
@@ -137,9 +133,8 @@ async def _save_news_items(news_items: list[dict], source_id: int):
 
 @celery_app.task(name='parse_all_sources')
 def parse_all_sources():
-    """
-    Парсит все источники новостей
-    """
+    """Парсит все источники новостей."""
+
     run_async(_parse_all_sources_async())
 
 
@@ -200,22 +195,21 @@ async def _parse_all_sources_async():
 
 @celery_app.task(name='process_news_items')
 def process_news_items():
-    """
-    Обрабатывает новые новости: фильтрация → генерация → публикация
-    Запускается по расписанию через Celery Beat
-    """
+    """Обрабатывает новые новости: фильтрация → генерация → публикация."""
     run_async(_process_news_items_async())
 
 
 async def _process_news_items_async():
-    """Асинхронная функция для обработки новостей"""
+    """Асинхронная функция для обработки новостей."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(NewsItem)
+            .join(Source, NewsItem.source_id == Source.id)
+            .where(Source.enabled.is_(True))
             .order_by(NewsItem.published_at.desc())
             .limit(NEWS_ITEMS_PROCESS_LIMIT)
         )
-        news_items = result.scalars().all()
+        news_items = result.scalars().unique().all()
         processed_count = 0
         skipped_count = 0
         for news_item in news_items:
@@ -274,10 +268,8 @@ async def _process_news_items_async():
     default_retry_delay=GENERATE_RETRY_DELAY_SECONDS
 )
 def generate_post_for_news(news_id: str):
-    """
-    Генерирует пост для новости.
-    """
-    run_async(_generate_post_for_news_async(news_id))
+    """Генерирует пост для новости."""
+    return run_async(_generate_post_for_news_async(news_id))
 
 
 async def _generate_post_for_news_async(news_id: str):
@@ -290,7 +282,7 @@ async def _generate_post_for_news_async(news_id: str):
 
         if not news_item:
             logger.warning(f"Новость {news_id} не найдена")
-            return
+            return None
 
         try:
             if news_item.raw_text:
@@ -331,10 +323,12 @@ async def _generate_post_for_news_async(news_id: str):
                 args=(post.id,),
                 countdown=PUBLISH_DELAY_AFTER_GENERATION_SECONDS
             )
+            return {"news_id": news_id, "post_id": post.id}
         except AIProviderError as e:
             logger.error(f"Ошибка AI генерации {news_id}: {e}")
         except Exception as e:
             logger.error(f"Ошибка генерации {news_id}: {e}", exc_info=True)
+        return None
 
 
 @celery_app.task(
@@ -344,23 +338,19 @@ async def _generate_post_for_news_async(news_id: str):
     default_retry_delay=PUBLISH_RETRY_DELAY_SECONDS
 )
 def publish_post(post_id: int):
-    """
-    Публикует пост в Telegram-канал
-    """
+    """Публикует пост в Telegram-канал."""
     run_async(_publish_post_async(post_id))
 
 
 async def _publish_post_async(post_id: int):
-    """Асинхронная функция для публикации поста"""
+    """Асинхронная функция для публикации поста."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(Post).filter(Post.id == post_id)
         )
         post = result.scalar_one_or_none()
-
         if not post:
             return
-
         if post.status == PostStatus.PUBLISHED and post.published_at:
             return
 
@@ -372,17 +362,12 @@ async def _publish_post_async(post_id: int):
                 post_id=post_id,
                 db=db
             )
-
             if telegram_message_id:
                 logger.info(f"Пост {post_id} опубликован")
             else:
-                post.status = PostStatus.FAILED
-                await db.commit()
                 logger.error(f"Не удалось опубликовать пост {post_id}")
         except Exception as e:
             logger.error(f"Ошибка публикации {post_id}: {e}", exc_info=True)
-            post.status = PostStatus.FAILED
-            await db.commit()
         finally:
             if publisher:
                 try:
