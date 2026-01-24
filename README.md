@@ -47,7 +47,7 @@ aibot/
 
 **Требования:** Docker Engine 20.10+, Docker Compose v2.1+ (для `depends_on` с `condition: service_healthy`).
 
-1. Скопируйте `env.example` в `.env` и заполните значения (всё необходимое — в примере).
+1. Скопируйте `env.example` в `.env` и заполните значения.
 
 2. Запустите сервисы:
 
@@ -69,9 +69,6 @@ aibot/
 
 ---
 
-Переменные окружения — см. `env.example`.
-
----
 
 ## API
 
