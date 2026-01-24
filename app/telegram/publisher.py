@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from telethon import TelegramClient
 from telethon.errors import (ChannelInvalidError, FloodWaitError,
                              UsernameInvalidError)
@@ -127,8 +128,7 @@ class TelegramPublisher:
     ) -> int | None:
         """Опубликовать пост в канал."""
         if not text or not text.strip():
-            error_msg = "Текст поста не может быть пустым"
-            logger.error(error_msg)
+            logger.error("Текст поста не может быть пустым")
             if post_id and db:
                 await self._mark_post_as_failed(None, post_id, db)
             return None
@@ -136,7 +136,9 @@ class TelegramPublisher:
         post = None
         if post_id and db:
             result = await db.execute(
-                select(Post).filter(Post.id == post_id)
+                select(Post)
+                .options(selectinload(Post.news_item))
+                .filter(Post.id == post_id)
             )
             post = result.scalar_one_or_none()
             if post:
@@ -146,6 +148,12 @@ class TelegramPublisher:
                         f"({post.published_at}). Пропускаем."
                     )
                     return None
+
+        message_text = text
+        if post and post.news_item and post.news_item.url:
+            message_text = (
+                text.rstrip() + "\n\n🔗 Источник: " + post.news_item.url
+            )
 
         try:
             await self.connect()
@@ -160,7 +168,9 @@ class TelegramPublisher:
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    message = await self.client.send_message(channel, text)
+                    message = await self.client.send_message(
+                        channel, message_text
+                    )
                     telegram_message_id = message.id
                     break
                 except FloodWaitError as e:

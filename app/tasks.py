@@ -53,6 +53,7 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
+    broker_connection_retry_on_startup=True,
     task_track_started=True,
     task_time_limit=TASK_TIME_LIMIT_SECONDS,
     task_soft_time_limit=TASK_SOFT_TIME_LIMIT_SECONDS,
@@ -91,6 +92,7 @@ async def _save_news_items(news_items: list[dict], source_id: int):
 
     async with AsyncSessionLocal() as db:
         saved_count = 0
+        skipped_count = 0
         for item in news_items:
             try:
                 news_id = hashlib.md5(
@@ -101,6 +103,7 @@ async def _save_news_items(news_items: list[dict], source_id: int):
                 )
                 existing = result.scalar_one_or_none()
                 if existing:
+                    skipped_count += 1
                     continue
                 published_at = (
                     item.get('published_at') or
@@ -119,13 +122,28 @@ async def _save_news_items(news_items: list[dict], source_id: int):
                     raw_text=item.get('raw_text')
                 )
                 db.add(news_item)
-                saved_count += 1
+                try:
+                    await db.commit()
+                    saved_count += 1
+                except Exception as commit_error:
+                    await db.rollback()
+                    # Проверяем, не дубликат ли это
+                    from sqlalchemy.exc import IntegrityError
+                    if isinstance(commit_error, IntegrityError):
+                        # Дубликат - пропускаем
+                        skipped_count += 1
+                    else:
+                        logger.error(
+                            f"Ошибка при сохранении новости {news_id}: "
+                            f"{commit_error}",
+                            exc_info=True
+                        )
             except Exception as e:
                 logger.error(
-                    f"Ошибка при сохранении новости: {e}", exc_info=True)
+                    f"Ошибка при обработке новости: {e}", exc_info=True)
+                await db.rollback()
                 continue
 
-        await db.commit()
         if saved_count > 0:
             logger.info(f"Сохранено {saved_count}/{len(news_items)} новостей")
         return saved_count
@@ -134,7 +152,6 @@ async def _save_news_items(news_items: list[dict], source_id: int):
 @celery_app.task(name='parse_all_sources')
 def parse_all_sources():
     """Парсит все источники новостей."""
-
     run_async(_parse_all_sources_async())
 
 
@@ -290,6 +307,10 @@ async def _generate_post_for_news_async(news_id: str):
             else:
                 news_text = f"{news_item.title}\n\n{news_item.summary}"
 
+            if not news_text or not news_text.strip():
+                logger.error(f"Пустой текст новости {news_id}")
+                return None
+
             generator = PostGenerator()
             generated_text = await asyncio.to_thread(
                 generator.generate_post,
@@ -325,9 +346,31 @@ async def _generate_post_for_news_async(news_id: str):
             )
             return {"news_id": news_id, "post_id": post.id}
         except AIProviderError as e:
-            logger.error(f"Ошибка AI генерации {news_id}: {e}")
+            logger.error(
+                f"Ошибка AI генерации для новости {news_id}: {e}",
+                exc_info=True
+            )
+            # Помечаем пост как failed, если он существует
+            try:
+                result_posts = await db.execute(
+                    select(Post).filter(
+                        Post.news_id == news_id,
+                        Post.status.in_([PostStatus.NEW, PostStatus.GENERATED])
+                    ).order_by(Post.id.desc())
+                )
+                existing_post = result_posts.scalar_one_or_none()
+                if existing_post:
+                    existing_post.status = PostStatus.FAILED
+                    await db.commit()
+            except Exception as db_error:
+                logger.error(
+                    f"Ошибка при обновлении статуса поста: {db_error}"
+                )
         except Exception as e:
-            logger.error(f"Ошибка генерации {news_id}: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка генерации для новости {news_id}: {e}",
+                exc_info=True
+            )
         return None
 
 
@@ -352,6 +395,17 @@ async def _publish_post_async(post_id: int):
         if not post:
             return
         if post.status == PostStatus.PUBLISHED and post.published_at:
+            return
+
+        if not post.generated_text or not post.generated_text.strip():
+            logger.error(f"Пост {post_id} имеет пустой generated_text")
+            try:
+                post.status = PostStatus.FAILED
+                await db.commit()
+            except Exception as db_error:
+                logger.error(
+                    f"Ошибка при обновлении статуса поста: {db_error}"
+                )
             return
 
         publisher = None
